@@ -132,6 +132,7 @@ import StickerLibraryPanel from '@/components/stickers/StickerLibraryPanel.vue';
 import StickerShareModal, { type StickerShareGroupOption } from '@/components/stickers/StickerShareModal.vue';
 import { shareNativeFile } from '@/services/nativeFile';
 import { isNativePhotoLibrarySaveAvailable, saveNativeImage } from '@/services/nativeMedia';
+import { appApiFetch, appApiUrl, isNativeAppRuntime } from '@/services/appApi';
 import { useAppStore } from '@/stores/appStore';
 import type { Sticker, StickerSourceType } from '@/types/domain';
 import { RECENT_STICKER_GROUP_ID, createImageFileStickerDraft, getStickerDisplayImageUrl, parseStickerImportText, readStickerImportFile, type StickerImportDraft } from '@/utils/stickers';
@@ -339,8 +340,8 @@ function isRemoteImageUrl(value: string) {
 }
 
 function createHashDownloadUrl(imageUrl: string) {
-  return import.meta.env.DEV && isRemoteImageUrl(imageUrl)
-    ? `/__image-download?url=${encodeURIComponent(imageUrl)}`
+  return (import.meta.env.DEV || isNativeAppRuntime()) && isRemoteImageUrl(imageUrl)
+    ? appApiUrl(`/__image-download?url=${encodeURIComponent(imageUrl)}`)
     : imageUrl;
 }
 
@@ -354,7 +355,7 @@ async function hashStickerImage(sticker: Sticker) {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 5500);
   try {
-    const response = await fetch(createHashDownloadUrl(imageUrl), {
+    const response = await appApiFetch(createHashDownloadUrl(imageUrl), {
       headers: { Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8' },
       signal: controller.signal
     });

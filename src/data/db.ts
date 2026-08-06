@@ -1051,14 +1051,13 @@ export async function loadAppStartupSnapshot(): Promise<AppStartupSnapshot> {
   await seedDatabase();
   await pruneLegacyDefaultData();
   const db = await getDb();
-  const [users, characters, conversations, voomPosts, profileThemes, profileHomepages, smallTheaterTopics, smallTheaters, musicFavoriteTracks, musicCommentThreads, worldBooks, stickerGroups, stickers, conversationSettings, memoryEpisodes, memoryEntities, memoryAssertions, memoryEdges, memoryThemes, memoryStateSnapshots, memoryEmbeddings, generatedImages, favorites, settings] = await Promise.all([
+  const [users, characters, conversations, voomPosts, profileThemes, profileHomepages, smallTheaters, musicFavoriteTracks, musicCommentThreads, worldBooks, stickerGroups, stickers, conversationSettings, generatedImages, favorites, settings] = await Promise.all([
     db.getAll('user'),
     db.getAll('characters'),
     db.getAll('conversations'),
     db.getAll('voomPosts'),
     db.getAll('profileThemes'),
     db.getAll('profileHomepages'),
-    db.getAll('smallTheaterTopics'),
     db.getAll('smallTheaters'),
     db.getAll('musicFavoriteTracks'),
     db.getAll('musicCommentThreads'),
@@ -1066,13 +1065,6 @@ export async function loadAppStartupSnapshot(): Promise<AppStartupSnapshot> {
     db.getAll('stickerGroups'),
     db.getAll('stickers'),
     db.getAll('conversationSettings'),
-    db.getAll('memoryEpisodes'),
-    db.getAll('memoryEntities'),
-    db.getAll('memoryAssertions'),
-    db.getAll('memoryEdges'),
-    db.getAll('memoryThemes'),
-    db.getAll('memoryStateSnapshots'),
-    db.getAll('memoryEmbeddings'),
     db.getAll('generatedImages'),
     db.getAll('favorites'),
     db.get('settings', 'main')
@@ -1097,7 +1089,7 @@ export async function loadAppStartupSnapshot(): Promise<AppStartupSnapshot> {
     voomPosts,
     profileThemes,
     profileHomepages,
-    smallTheaterTopics,
+    smallTheaterTopics: [],
     smallTheaters,
     musicFavoriteTracks,
     musicCommentThreads,
@@ -1105,17 +1097,36 @@ export async function loadAppStartupSnapshot(): Promise<AppStartupSnapshot> {
     stickerGroups,
     stickers,
     conversationSettings,
-    memoryEpisodes,
-    memoryEntities,
-    memoryAssertions,
-    memoryEdges,
-    memoryThemes,
-    memoryStateSnapshots,
-    memoryEmbeddings,
+    memoryEpisodes: [],
+    memoryEntities: [],
+    memoryAssertions: [],
+    memoryEdges: [],
+    memoryThemes: [],
+    memoryStateSnapshots: [],
+    memoryEmbeddings: [],
     generatedImages,
     favorites,
     settings: normalizedSettings
   };
+}
+
+export async function loadSmallTheaterTopics() {
+  const db = await getDb();
+  return await db.getAll('smallTheaterTopics');
+}
+
+export async function loadMemoryGraphSnapshot() {
+  const db = await getDb();
+  const [memoryEpisodes, memoryEntities, memoryAssertions, memoryEdges, memoryThemes, memoryStateSnapshots, memoryEmbeddings] = await Promise.all([
+    db.getAll('memoryEpisodes'),
+    db.getAll('memoryEntities'),
+    db.getAll('memoryAssertions'),
+    db.getAll('memoryEdges'),
+    db.getAll('memoryThemes'),
+    db.getAll('memoryStateSnapshots'),
+    db.getAll('memoryEmbeddings')
+  ]);
+  return { memoryEpisodes, memoryEntities, memoryAssertions, memoryEdges, memoryThemes, memoryStateSnapshots, memoryEmbeddings };
 }
 
 export async function loadConversationMessagePreviews(conversationIds: Iterable<string>) {

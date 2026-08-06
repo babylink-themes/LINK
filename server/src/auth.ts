@@ -37,6 +37,13 @@ interface ChallengeRow {
   error: string;
 }
 
+interface CachedSessionIdentity {
+  identity: SessionIdentity;
+  expiresAt: number;
+}
+
+const sessionIdentityCache = new Map<string, CachedSessionIdentity>();
+
 function createChallengeCode(length = 8) {
   const bytes = crypto.getRandomValues(new Uint8Array(length));
   return Array.from(bytes, (byte) => challengeAlphabet[byte % challengeAlphabet.length]).join('');
@@ -56,6 +63,45 @@ function clientIp(request: FastifyRequest) {
   return request.ip || request.socket.remoteAddress || '';
 }
 
+function headerValue(request: FastifyRequest, name: string) {
+  const value = request.headers[name];
+  return Array.isArray(value) ? String(value[0] ?? '').trim() : String(value ?? '').trim();
+}
+
+function requestSessionToken(request: FastifyRequest) {
+  return headerValue(request, 'x-link-session') || request.cookies[config.cookieName] || '';
+}
+
+function nativeChallengeRequest(request: FastifyRequest) {
+  return headerValue(request, 'x-link-native-client') === 'capacitor';
+}
+
+function cacheSessionIdentity(tokenHash: string, identity: SessionIdentity) {
+  const expiresAt = Math.min(identity.expiresAt, Date.now() + config.sessionCacheSeconds * 1_000);
+  sessionIdentityCache.set(tokenHash, { identity, expiresAt });
+}
+
+function readCachedSessionIdentity(tokenHash: string) {
+  const cached = sessionIdentityCache.get(tokenHash);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now() || cached.identity.expiresAt <= Date.now()) {
+    sessionIdentityCache.delete(tokenHash);
+    return null;
+  }
+  return cached.identity;
+}
+
+export function invalidateSessionIdentityCacheForQq(qq: string) {
+  for (const [tokenHash, cached] of sessionIdentityCache) {
+    if (cached.identity.qq === qq) sessionIdentityCache.delete(tokenHash);
+  }
+}
+
+function invalidateSessionIdentityCacheForToken(token: string) {
+  const normalizedToken = token.trim();
+  if (normalizedToken) sessionIdentityCache.delete(hashSecret(normalizedToken));
+}
+
 export async function recordAudit(action: string, qq = '', detail: Record<string, unknown> = {}, ip = '') {
   await query(
     'INSERT INTO audit_logs (qq, action, detail, ip_hash) VALUES ($1, $2, $3::jsonb, $4)',
@@ -64,8 +110,12 @@ export async function recordAudit(action: string, qq = '', detail: Record<string
 }
 
 export async function getSessionIdentity(request: FastifyRequest): Promise<SessionIdentity | null> {
-  const token = request.cookies[config.cookieName];
+  const token = requestSessionToken(request);
   if (!token) return null;
+
+  const tokenHash = hashSecret(token);
+  const cached = readCachedSessionIdentity(tokenHash);
+  if (cached) return cached;
 
   const result = await query<SessionRow>(`
     SELECT
@@ -91,17 +141,19 @@ export async function getSessionIdentity(request: FastifyRequest): Promise<Sessi
           AND m.last_seen_at > NOW() - ($2::int * INTERVAL '1 hour')
       )
     LIMIT 1
-  `, [hashSecret(token), config.membershipMaxAgeHours]);
+  `, [tokenHash, config.membershipMaxAgeHours]);
 
   const row = result.rows[0];
   if (!row) return null;
-  return {
+  const identity = {
     sessionId: row.session_id,
     qq: row.qq,
     deviceId: row.device_id,
     deviceLabel: row.device_label,
     expiresAt: row.expires_at.getTime()
   };
+  cacheSessionIdentity(tokenHash, identity);
+  return identity;
 }
 
 export async function requireSession(request: FastifyRequest, reply: FastifyReply) {
@@ -221,7 +273,10 @@ export async function updateMembership(input: {
       updated_at = NOW()
   `, [input.qq, input.groupId, input.active, input.role || 'member', input.nickname || '']);
 
-  if (!input.active) await revokeSessionsWithoutMembership(input.qq);
+  if (!input.active) {
+    await revokeSessionsWithoutMembership(input.qq);
+    invalidateSessionIdentityCacheForQq(input.qq);
+  }
 }
 
 export async function revokeSessionsWithoutMembership(qq: string) {
@@ -261,6 +316,7 @@ export async function revokeAllDevicesForQq(qq: string) {
         AND expires_at > NOW()
         AND error = ''
     `, [qq]);
+    invalidateSessionIdentityCacheForQq(qq);
     return { devices: devices.rowCount ?? 0, sessions: sessions.rowCount ?? 0 };
   });
 }
@@ -356,7 +412,8 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       return {
         state: 'authenticated',
         qq: result.qq,
-        leaseUntil: Math.min(result.expiresAt.getTime(), Date.now() + config.offlineLeaseHours * 60 * 60 * 1000)
+        leaseUntil: Math.min(result.expiresAt.getTime(), Date.now() + config.offlineLeaseHours * 60 * 60 * 1000),
+        ...(nativeChallengeRequest(request) ? { sessionToken: result.sessionToken } : {})
       };
     } catch (error) {
       return await reply.code(409).send({
@@ -375,8 +432,11 @@ export async function registerAuthRoutes(app: FastifyInstance) {
   });
 
   app.post('/api/auth/logout', async (request, reply) => {
-    const token = request.cookies[config.cookieName];
-    if (token) await query('UPDATE sessions SET revoked_at = NOW() WHERE token_hash = $1', [hashSecret(token)]);
+    const token = requestSessionToken(request);
+    if (token) {
+      await query('UPDATE sessions SET revoked_at = NOW() WHERE token_hash = $1', [hashSecret(token)]);
+      invalidateSessionIdentityCacheForToken(token);
+    }
     reply.clearCookie(config.cookieName, sessionCookieOptions());
     return { ok: true };
   });
@@ -407,6 +467,7 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       await client.query('UPDATE devices SET revoked_at = NOW() WHERE id = $1 AND qq = $2', [deviceId, session.qq]);
       await client.query('UPDATE sessions SET revoked_at = NOW() WHERE device_id = $1 AND qq = $2', [deviceId, session.qq]);
     });
+    invalidateSessionIdentityCacheForQq(session.qq);
     if (deviceId === session.deviceId) reply.clearCookie(config.cookieName, sessionCookieOptions());
     await recordAudit('auth.device.revoked', session.qq, { deviceId }, clientIp(request));
     return { ok: true };
@@ -427,11 +488,19 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     const groupId = String((request.params as { groupId?: string }).groupId ?? '').trim();
     const body = request.body as { name?: unknown; enabled?: unknown } | null;
     if (!/^\d{5,20}$/.test(groupId)) return await reply.code(400).send({ error: 'invalid_group_id' });
+    const enabled = body?.enabled !== false;
     await query(`
       INSERT INTO allowed_groups (group_id, name, enabled)
       VALUES ($1, $2, $3)
       ON CONFLICT (group_id) DO UPDATE SET name = EXCLUDED.name, enabled = EXCLUDED.enabled, updated_at = NOW()
-    `, [groupId, String(body?.name ?? '').trim().slice(0, 80), body?.enabled !== false]);
+    `, [groupId, String(body?.name ?? '').trim().slice(0, 80), enabled]);
+    if (!enabled) {
+      const memberships = await query<{ qq: string }>('SELECT DISTINCT qq FROM memberships WHERE group_id = $1 AND active = TRUE', [groupId]);
+      await Promise.all(memberships.rows.map(async ({ qq }) => {
+        await revokeSessionsWithoutMembership(qq);
+        invalidateSessionIdentityCacheForQq(qq);
+      }));
+    }
     return { ok: true };
   });
 
@@ -441,7 +510,10 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     const status = String((request.body as { status?: unknown } | null)?.status ?? '');
     if (!qqPattern.test(qq) || !['active', 'banned'].includes(status)) return await reply.code(400).send({ error: 'invalid_status_request' });
     await query('UPDATE users SET status = $2, updated_at = NOW() WHERE qq = $1', [qq, status]);
-    if (status === 'banned') await query('UPDATE sessions SET revoked_at = NOW() WHERE qq = $1 AND revoked_at IS NULL', [qq]);
+    if (status === 'banned') {
+      await query('UPDATE sessions SET revoked_at = NOW() WHERE qq = $1 AND revoked_at IS NULL', [qq]);
+      invalidateSessionIdentityCacheForQq(qq);
+    }
     await recordAudit('admin.user.status', qq, { status }, clientIp(request));
     return { ok: true };
   });

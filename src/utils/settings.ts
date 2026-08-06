@@ -1556,6 +1556,7 @@ function isLikelyViteProxyPort(port: string) {
 function canUseLocalImageProxy() {
   if (import.meta.env.DEV) return true;
   if (typeof window === 'undefined') return false;
+  if (window.location.protocol === 'capacitor:') return true;
   if (!['http:', 'https:'].includes(window.location.protocol)) return false;
   return isLocalProxyHostname(window.location.hostname) || isLikelyViteProxyPort(window.location.port);
 }

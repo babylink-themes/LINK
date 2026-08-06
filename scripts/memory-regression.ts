@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import type { ChatMessage } from '../src/types/domain.ts';
 import type { MemoryAssertion, MemoryEpisode, MemoryExtractionResult, MemoryTheme } from '../src/types/memory.ts';
+import { fallbackMemoryNarrative, parseLooseMemoryJson } from '../src/utils/memoryExtractionParsing.ts';
 import { getConversationFloors, getRecentCompleteFloorMessages, resolveMemoryEpisodeFloorRange } from '../src/utils/memoryFloors.ts';
 import { selectMemoryCaptureFloors } from '../src/utils/memoryCapture.ts';
-import { createMemoryAssertionDedupeKey, createMemorySourceHash, integrateMemoryExtraction, isMemorySourceSnapshotCurrent, recallCharacterMemory, resolveMemoryEpisodeForgottenReason } from '../src/utils/memoryGraph.ts';
+import { compareMemoryEpisodeTimeline, createMemoryAssertionDedupeKey, createMemorySourceHash, integrateMemoryExtraction, isMemorySourceSnapshotCurrent, recallCharacterMemory, rebuildMemoryStateSnapshots, resolveMemoryEpisodeForgottenReason } from '../src/utils/memoryGraph.ts';
 import { applyCurrentChatMemoryDefaults, normalizeChatMemorySetting } from '../src/utils/memorySettings.ts';
-import { extractCompleteJsonObject, normalizeNarrativeText } from '../src/utils/structuredText.ts';
+import { extractCompleteJsonObject, limitNarrativeText, normalizeNarrativeText } from '../src/utils/structuredText.ts';
 
 function message(id: string, sender: ChatMessage['sender'], mode: ChatMessage['mode'], createdAt: number, extra: Partial<ChatMessage> = {}): ChatMessage {
   return {
@@ -30,6 +31,17 @@ const longNarrative = `${'很长的正文。'.repeat(1_000)}\n\n最后一句必�
 const normalizedNarrative = normalizeNarrativeText(longNarrative);
 assert.ok(normalizedNarrative.length > 5_000);
 assert.ok(normalizedNarrative.endsWith('最后一句必须保留。'));
+assert.equal(normalizeNarrativeText('<p><span class="x">海边</span>&nbsp;见面</p>'), '海边 见面');
+assert.match(limitNarrativeText('第一句。第二句。第三句。'.repeat(200), 120), /…$/);
+
+const partialDiaryMetadata = { repairedJson: false };
+const partialDiary = parseLooseMemoryJson('{"narrative":"用户告诉我明天去海边"', partialDiaryMetadata);
+assert.match(String(partialDiary?.narrative), /明天去海边/);
+assert.equal(partialDiaryMetadata.repairedJson, true);
+assert.match(fallbackMemoryNarrative('我记得我们刚刚讨论了周末安排。'), /周末安排/);
+assert.match(fallbackMemoryNarrative('{"narrative":"已完成的正文内容"'), /已完成的正文内容/);
+const partialGraph = parseLooseMemoryJson('{"assertions":[{"subjectKey":"self","predicate":"喜欢","objectText":"海边"', { repairedJson: false });
+assert.equal(Array.isArray(partialGraph?.assertions), true);
 
 const mixedMessages = [
   message('u1', 'user', 'online', 1),
@@ -262,6 +274,84 @@ const awareContext = recallCharacterMemory({ ...timedGraph, query: '公园', now
 const unawareContext = recallCharacterMemory({ ...timedGraph, query: '公园', now: Date.now(), timeAwarenessEnabled: false }).contextText;
 assert.match(awareContext, /天前|今天|昨天/);
 assert.doesNotMatch(unawareContext, /天前|今天|昨天/);
+
+const sequenceEarlier = {
+  ...timedEpisode,
+  id: 'sequence-earlier',
+  occurredAt: Date.now() + 10_000,
+  createdAt: Date.now() + 10_000,
+  storyTime: { kind: 'sequence' as const, text: '剧情第一段', sequence: 1, confidence: 1 }
+};
+const sequenceLater = {
+  ...timedEpisode,
+  id: 'sequence-later',
+  occurredAt: Date.now() - 10_000,
+  createdAt: Date.now() - 10_000,
+  storyTime: { kind: 'sequence' as const, text: '剧情第二段', sequence: 2, confidence: 1 }
+};
+assert.ok(compareMemoryEpisodeTimeline(sequenceEarlier, sequenceLater) < 0);
+
+const stateEpisode = {
+  ...timedEpisode,
+  id: 'state-episode',
+  stateDeltas: [{ kind: 'current-context' as const, summary: '我在公园。', confidence: 1, facets: [{ key: 'location', label: '地点', delta: 0.5 }] }]
+};
+const rebuiltStateSnapshots = rebuildMemoryStateSnapshots({
+  brainId: graphInput.brainId,
+  episodes: [stateEpisode],
+  assertions: firstGraph.assertions
+});
+assert.equal(rebuiltStateSnapshots.length, 1);
+assert.equal(rebuildMemoryStateSnapshots({
+  brainId: graphInput.brainId,
+  episodes: [{ ...stateEpisode, stateDeltas: [] }],
+  assertions: firstGraph.assertions
+}).length, 0);
+
+const detailedEpisode = {
+  ...timedEpisode,
+  id: 'detailed-episode',
+  sourceMessageIds: ['detail-message'],
+  title: '海边见面',
+  narrative: '我记得我们在海边见面。',
+  eventBeats: [{
+    order: 1,
+    sourceMessageIds: ['detail-message'],
+    timeText: '傍晚',
+    location: { actor: 'shared-scene' as const, source: 'offline-scene' as const, label: '海边', evidenceMessageIds: ['detail-message'], confidence: 1 },
+    participants: ['我', '用户'],
+    actions: ['一起沿着海岸走了一段'],
+    dialogueFacts: ['用户说明了明天的安排'],
+    changes: ['我们约定下次继续散步'],
+    commitments: ['下次再来海边'],
+    unresolvedQuestions: ['明天是否会下雨']
+  }]
+};
+const detailedAssertion = {
+  ...timedAssertion,
+  id: 'detailed-assertion',
+  perspectiveText: '我记得我们在海边见面。',
+  searchText: '海边见面',
+  sourceEpisodeIds: [detailedEpisode.id],
+  evidenceMessageIds: detailedEpisode.sourceMessageIds
+};
+const detailedRecall = recallCharacterMemory({
+  brainId: graphInput.brainId,
+  episodes: [detailedEpisode],
+  entities: firstGraph.entities,
+  assertions: [detailedAssertion],
+  edges: firstGraph.edges,
+  themes: [],
+  stateSnapshots: [],
+  query: '海边',
+  maxTokens: 2_000,
+  now: Date.now(),
+  timeAwarenessEnabled: false
+});
+assert.match(detailedRecall.contextText, /海边/);
+assert.match(detailedRecall.contextText, /一起沿着海岸走了一段/);
+assert.match(detailedRecall.contextText, /承诺：下次再来海边/);
+assert.match(detailedRecall.contextText, /未解：明天是否会下雨/);
 
 const unlimitedEpisodes: MemoryEpisode[] = Array.from({ length: 30 }, (_, index) => ({
   ...timedEpisode,

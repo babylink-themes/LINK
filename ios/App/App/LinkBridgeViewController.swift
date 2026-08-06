@@ -6,5 +6,6 @@ final class LinkBridgeViewController: CAPBridgeViewController {
         bridge?.registerPluginType(LinkBackupPlugin.self)
         bridge?.registerPluginType(LinkMediaPlugin.self)
         bridge?.registerPluginType(LinkStoragePlugin.self)
+        bridge?.registerPluginType(LinkSessionPlugin.self)
     }
 }

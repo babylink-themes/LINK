@@ -1,4 +1,5 @@
 import { unzipSync } from 'fflate';
+import { appApiFetch, appApiUrl } from '@/services/appApi';
 import type { Sticker, StickerGroup, StickerSourceType } from '@/types/domain';
 import { compressInlineImageDataUrl } from '@/utils/imageFile';
 import { createId } from './id';
@@ -133,7 +134,7 @@ function createImageDownloadUrl(url: string) {
       return url;
     }
   }
-  return `${imageDownloadPath}?url=${encodeURIComponent(url)}`;
+  return appApiUrl(`${imageDownloadPath}?url=${encodeURIComponent(url)}`);
 }
 
 function readBlobAsDataUrl(blob: Blob) {
@@ -165,7 +166,7 @@ export async function localizeStickerImageUrl(imageUrl: string) {
   let lastError: unknown;
   for (const candidate of candidates) {
     try {
-      const nextResponse = await fetch(candidate, {
+      const nextResponse = await appApiFetch(candidate, {
         headers: { Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8' }
       });
       response = nextResponse;

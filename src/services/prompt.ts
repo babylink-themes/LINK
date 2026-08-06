@@ -1,5 +1,6 @@
 import type { ChatMode, ConversationOfflineSettings, ConversationRoleGuidanceSettings, OfflinePromptPreset, OfflineStructureKind, PromptContext, WorldBookEntry, WorldBookLoreEntry } from '@/types/domain';
 import { offlineGuidancePrompts } from '@/data/offlineGuidance';
+import { onlineCallResponsePrompt, onlineCoreRoleplayPrompt, onlineGobangResponsePrompt, onlineInputSemanticsPrompt, onlineNarrationPrompt, onlinePendingMusicInvitePrompt, onlinePendingTransferPrompt, onlinePunctuationPrompt, onlineRelationshipEventPrompt, onlineReplyProtocolPrompt, onlineRoleGuidancePrompts, onlineRoutineCarePrompt, onlineStickerPrompt } from '@/data/onlinePrompts';
 import { normalizeTimeAwarenessSettings, renderTimeAwarenessPrompt } from '@/utils/timeAwareness';
 import { activeOfflineTonePreset, activeOfflineWritingStylePreset, defaultOfflineSettings, normalizeOfflineSettings, normalizeRoleGuidanceSettings } from '@/utils/memory';
 import { getCurrentUserTurnMessages } from '@/utils/messageTurns';
@@ -232,14 +233,16 @@ export const baseRoleplayPrompt = `你是{{char}}。
 
 角色自己的情绪也会受身体状态、未满足的需求、现实压力、过往经验和社交关系影响。不要让角色每次都完美稳定、永远知道自己为什么难过，也不要让角色只围绕{{user}}产生情绪；当下反应应是一个有独立生活的人在当下处境中的有限选择。`;
 
-export const onlineChatPunctuationPrompt = `线上聊天标点符号硬规范：所有 text 项都会显示为独立聊天气泡，必须按真实即时聊天习惯输出。
+export const onlineChatPunctuationPrompt = `线上聊天标点符号规则：所有 text 项都会显示为独立聊天气泡。
 
-最高优先级：每一个 text 项的 content 都禁止用句号“。”收尾。无论气泡是一句还是多句，忽略末尾配对的引号、括号后，最后一个有效字符都不能是“。”；不要把句号藏进引号、括号或表情后面规避。发送前逐条检查，出现句号结尾就重写该气泡。
+标点优先级为：角色设定中明确写出的标点规范 > 当前场景、情绪、语义和可读性 > 默认线上聊天习惯。角色设定中的标点规范始终优先于下面的默认规则。
 
-通常情况下，真实聊天为了输入方便会跳过大多数常规标点，尤其是逗号和句末句号。优先依靠短句、空格、换行和自然停顿组织节奏，不要为了书面语完整性给每句话补标点，也不要把标点堆成固定人设装饰。
+当角色设定没有规定适用的标点习惯时，默认每个 text 气泡的末尾不使用句号“。”；仅在这个默认情况下改写句号收尾。若角色设定明确要求使用句号，则必须按角色设定使用，不受默认规则限制。
+
+标点应服务于角色表达和当前语境。可以使用短句、空格、换行和自然停顿，也可以按角色需要使用完整书面标点；不要机械补标点，不要把标点堆成固定人设装饰。
 
 基础标点的使用边界：
-句号“。”：线上聊天中容易显得生硬、严肃或像终结话题，因此每条 text 气泡都绝对不能以它结束。
+句号“。”：角色设定未规定时默认不用于气泡末尾；角色设定明确要求时可以使用。
 问号“？”和叹号“！”：在表达强烈语气时可以叠用，比如“？？？”表示强烈的疑惑，“！！！”则表达非常激动或惊讶的情绪。
 省略号“………”：聊天神器，功能超多。可以表示无语、思考、欲言又止，或者给对话留下一个开放的结尾。比如“你真的……觉得这样好吗？”
 
@@ -526,7 +529,7 @@ export const strictRoleplayRules = `补充严格规则：
 每个角色的NPC社交圈应包括朋友、同事、家人、同学、粉丝、熟人等。`;
 
 const modeInstructions: Record<ChatMode, string> = {
-  online: '把你的独立日程、空档经历、精力状态和可能的生活打断自然体现在消息节奏里。',
+  online: '按已知语境保持纯远程、合理转场或已同处实体场景的连续性；同时把独立日程、空档经历、精力状态和生活打断自然体现在消息节奏里。',
   offline: '回复要像小说章节一样呈现，并把你的私人生活推进、身体状态、社交圈与当下场景自然写进叙事。可以描写两人见面和同场互动，但仍必须遵守信息边界，不能让角色全知全能。'
 };
 
@@ -759,17 +762,26 @@ function renderOfflineLengthInstruction(enabled: boolean, wordCount: string) {
 5. 当本轮核心事件已经获得回应并来到新的用户选择点时停止，不用总结全文、预告下一章或追加第二个结尾。`;
 }
 
-function renderRoleGuidanceInstruction(settings: ConversationRoleGuidanceSettings) {
+function renderRoleGuidanceInstruction(
+  settings: ConversationRoleGuidanceSettings,
+  mode: ChatMode,
+  characterName: string,
+  userName: string
+) {
+  const prompts = mode === 'online' ? onlineRoleGuidancePrompts : offlineGuidancePrompts;
   const enabledGuidance = [
-    settings.emotionalGuidance ? offlineGuidancePrompts.emotionalGuidance : '',
-    settings.desireRestraint ? offlineGuidancePrompts.desireRestraint : '',
-    settings.antiToxicMasculinity ? offlineGuidancePrompts.antiToxicMasculinity : '',
-    settings.antiClicheRomance ? offlineGuidancePrompts.antiClicheRomance : '',
-    settings.dynamicWorldNarrative ? offlineGuidancePrompts.dynamicWorldNarrative : ''
+    settings.emotionalGuidance ? prompts.emotionalGuidance : '',
+    settings.desireRestraint ? prompts.desireRestraint : '',
+    settings.antiToxicMasculinity ? prompts.antiToxicMasculinity : '',
+    settings.antiClicheRomance ? prompts.antiClicheRomance : '',
+    settings.dynamicWorldNarrative ? prompts.dynamicWorldNarrative : ''
   ].filter(Boolean);
   if (!enabledGuidance.length) return '';
-  return `角色与大世界引导（仅执行当前已开启的分类）：
-${enabledGuidance.join('\n\n')}`;
+  return replaceTokens(`角色与大世界引导（仅执行当前已开启的分类）：
+${enabledGuidance.join('\n\n')}`, {
+    '{{char}}': characterName,
+    '{{user}}': userName
+  });
 }
 
 const offlineSelfReviewPrompt = `输出前内部自我检测：
@@ -815,7 +827,7 @@ function renderOfflineSettingsPrompt(settings: ConversationOfflineSettings | nul
     renderOfflineOutfitInstruction(offlineSettings.enhanceOutfit),
     renderOfflineLengthInstruction(offlineSettings.expandLength, offlineSettings.wordCount),
     renderOfflineStructureInstruction(offlineSettings, 'paragraph', offlineParagraphInstruction[offlineSettings.paragraphMode], characterName, userName),
-    renderRoleGuidanceInstruction(offlineSettings),
+    renderRoleGuidanceInstruction(offlineSettings, 'offline', characterName, userName),
     offlineSelfReviewPrompt
   ].join('\n');
 }
@@ -984,14 +996,6 @@ function matchesLoreEntry(entry: WorldBookLoreEntry, activationText: string) {
   return !entry.secondaryKeys.length || entry.secondaryKeys.some((key) => includesKey(activationText, key, entry.caseSensitive));
 }
 
-function entryActivationLabel(entry: WorldBookLoreEntry) {
-  return {
-    keyword: '绿灯关键词触发',
-    constant: '蓝灯常驻注入',
-    priority: '黄灯优先注入'
-  }[entry.activation];
-}
-
 function replacePromptIdentityTokens(value: string, context: PromptContext) {
   const characterName = getCharacterAiName(context.character);
   const userName = getUserAiName(context.boundUser) || getUserAiName(context.user);
@@ -1005,9 +1009,6 @@ function replacePromptIdentityTokens(value: string, context: PromptContext) {
 function renderLoreEntry(book: WorldBookEntry, entry: WorldBookLoreEntry, context: PromptContext) {
   return [
     `【${replacePromptIdentityTokens(book.title || '未命名世界书', context)} / ${replacePromptIdentityTokens(entry.title || '未命名条目', context)}】`,
-    `状态：${entryActivationLabel(entry)}；顺序 ${entry.order}；深度 ${entry.depth}；位置 ${entry.position === 'before-chat' ? '对话前' : '对话后'}`,
-    entry.keys.length ? `主关键词：${entry.keys.map((key) => replacePromptIdentityTokens(key, context)).join('、')}` : '',
-    entry.secondaryKeys.length ? `辅助关键词：${entry.secondaryKeys.map((key) => replacePromptIdentityTokens(key, context)).join('、')}` : '',
     replacePromptIdentityTokens(entry.content, context)
   ].filter(Boolean).join('\n');
 }
@@ -1029,12 +1030,10 @@ function renderWorldBooks(entries: WorldBookEntry[], context: PromptContext) {
 
 function renderAvailableStickers(context: PromptContext) {
   const stickers = context.availableStickers ?? [];
-  if (!stickers.length) return '当前没有允许你主动发送的 Stickers。';
+  if (!stickers.length) return 'No Sticker is available this turn; do not output a sticker message.';
   return [
-    '你可以在合适时主动发送 Stickers，但只能从下面列表中选择。',
-    '如果要发送，在 messages 中加入 { "type":"sticker", "stickers":["Sticker id或文字描述"] }。',
-    'Sticker 的顺序由 messages 的位置决定；不要编造列表外的 Sticker。',
-    ...stickers.map((sticker) => `- id: ${sticker.stickerId}；描述: ${sticker.description}`)
+    'Allowed Stickers for this turn; choose only listed IDs when context supports a sticker:',
+    ...stickers.map((sticker) => `- ${sticker.stickerId}: ${sticker.description}`)
   ].join('\n');
 }
 
@@ -1072,7 +1071,7 @@ function renderThoughtChainThemePrompt(context: PromptContext) {
 
 function renderMusicListeningPrompt(context: PromptContext) {
   const listening = context.musicListening;
-  if (!listening?.active) return '当前没有一起听连接。';
+  if (!listening?.active) return '';
   const track = listening.currentTrack;
   const duration = listening.duration || track?.duration || 0;
   return [
@@ -1080,8 +1079,7 @@ function renderMusicListeningPrompt(context: PromptContext) {
     `发起方：${listening.inviter === 'user' ? '用户' : '角色'}。`,
     track ? `正在播放：《${track.name}》 - ${track.artists.join(' / ') || '未知歌手'}${track.album ? `，专辑《${track.album}》` : ''}。` : '当前还没有选定歌曲。',
     `播放进度：${Math.max(0, Math.floor(listening.currentTime))} / ${Math.max(0, Math.floor(duration))} 秒。`,
-    listening.lyricLine ? `此刻听到的歌词：${listening.lyricLine}` : '此刻没有可用歌词。',
-    '一起听状态只允许同时连接一个角色；如果当前角色正在连接中，你可以自然提到正在一起听、对当前歌曲或歌词作出反应，也可以在合适时通过 messageActions.musicActions 切歌或把歌曲加入用户的“我的喜欢音乐”。只在文字里说“我切了/我收藏了”不会改变播放器或喜欢列表，必须写入 musicActions 才会真实执行；如果希望系统旁白出现在某一句前后，在 messages 对应位置加入 {"type":"music_action","actionIndex":0}。'
+    listening.lyricLine ? `此刻听到的歌词：${listening.lyricLine}` : '此刻没有可用歌词。'
   ].join('\n');
 }
 
@@ -1105,6 +1103,20 @@ function renderCharacterEconomyPrompt(context: PromptContext) {
   ].join('\n');
 }
 
+function renderOnlineConditionalActionPrompt(context: PromptContext, characterName: string) {
+  const recentMessages = context.messages.slice(-24);
+  const replyInstruction = context.replyInstruction ?? '';
+  return [
+    recentMessages.some((message) => message.sender === 'user' && message.transfer?.status === 'pending') ? onlinePendingTransferPrompt : '',
+    recentMessages.some((message) => message.sender === 'user' && message.musicListenInvite?.status === 'pending') ? onlinePendingMusicInvitePrompt : '',
+    replyInstruction.includes('messageActions.callResponse') ? onlineCallResponsePrompt : '',
+    replyInstruction.includes('messageActions.gobangResponse') ? onlineGobangResponsePrompt : '',
+    /accept_request|reject_request|request_friend/.test(replyInstruction)
+      ? replaceTokens(onlineRelationshipEventPrompt, { '{{char}}': characterName })
+      : ''
+  ].filter(Boolean).join('\n\n');
+}
+
 function replaceTokens(template: string, replacements: Record<string, string>) {
   return Object.entries(replacements).reduce((result, [token, value]) => result.split(token).join(value), template);
 }
@@ -1120,7 +1132,8 @@ export function selectWorldBooks(context: PromptContext) {
 
 export function buildPrompt(context: PromptContext, options: { includeOnlineChatPunctuation?: boolean; includeOnlineStickerSemantics?: boolean; includeOnlineRoutineCare?: boolean; includeAvailableStickers?: boolean; includeOnlineReplyTools?: boolean; includeCurrentTurnStickerImages?: boolean; outputPromptOverride?: string } = {}) {
   const selectedWorldBooks = selectWorldBooks(context);
-  const outputPrompt = options.outputPromptOverride ?? (context.mode === 'online' ? profileMutationPrompt : offlineReplyOutputPrompt);
+  const outputPrompt = options.outputPromptOverride ?? (context.mode === 'online' ? onlineReplyProtocolPrompt : offlineReplyOutputPrompt);
+  const roleplayPrompt = context.mode === 'online' ? onlineCoreRoleplayPrompt : `${baseRoleplayPrompt}\n\n${strictRoleplayRules}`;
   const includeOnlineReplyTools = options.includeOnlineReplyTools !== false;
   const includeMessageTime = normalizeTimeAwarenessSettings(context.timeAwareness).enabled;
   const characterName = getCharacterAiName(context.character);
@@ -1165,9 +1178,11 @@ export function buildPrompt(context: PromptContext, options: { includeOnlineChat
       return `[${message.id}] ${speaker}${sentAtText}: ${quoteText}${visualText}`;
     })
     .join('\n');
+  const musicListeningPrompt = renderMusicListeningPrompt(context);
+  const worldBookPrompt = renderWorldBooks(selectedWorldBooks, context);
 
   return [
-    replaceTokens(`${baseRoleplayPrompt}\n\n${strictRoleplayRules}\n\n${outputPrompt}`, {
+    replaceTokens(`${roleplayPrompt}\n\n${outputPrompt}`, {
       '{{char}}': characterName,
       '{{char_nickname}}': replacePromptIdentityTokens(context.character.nickname, context),
       '{{char_signature}}': replacePromptIdentityTokens(context.character.signature, context),
@@ -1179,36 +1194,37 @@ export function buildPrompt(context: PromptContext, options: { includeOnlineChat
     }),
     modeInstructions[context.mode],
     context.mode === 'offline' ? renderOfflineSettingsPrompt(context.offlineSettings, context) : '',
-    context.mode === 'online' ? renderRoleGuidanceInstruction(normalizeRoleGuidanceSettings(context.onlineGuidance)) : '',
-    context.mode === 'online' && options.includeOnlineChatPunctuation !== false ? onlineChatPunctuationPrompt : '',
-    context.mode === 'online' && options.includeOnlineRoutineCare !== false ? replaceTokens(onlineChatRoutineCarePrompt, { '{{user}}': userName }) : '',
-    context.mode === 'online' && options.includeOnlineStickerSemantics !== false ? onlineStickerSemanticsPrompt : '',
+    context.mode === 'online' ? renderRoleGuidanceInstruction(normalizeRoleGuidanceSettings(context.onlineGuidance), 'online', characterName, boundUserName || userName) : '',
+    context.mode === 'online' && options.includeOnlineChatPunctuation !== false ? onlinePunctuationPrompt : '',
+    context.mode === 'online' && options.includeOnlineRoutineCare !== false ? replaceTokens(onlineRoutineCarePrompt, { '{{char}}': characterName, '{{user}}': boundUserName || userName }) : '',
+    context.mode === 'online' && options.includeOnlineStickerSemantics !== false ? onlineStickerPrompt : '',
     context.mode === 'online' && includeOnlineReplyTools && context.narrationModeEnabled
-      ? replaceTokens(narrationModePrompt, {
+      ? replaceTokens(onlineNarrationPrompt, {
           '{{char}}': characterName,
-          '{{user}}': userName
+          '{{user}}': boundUserName || userName
         })
       : '',
     context.mode === 'online' && includeOnlineReplyTools && context.offlineInvitationEnabled === false
       ? '线下邀约功能当前已关闭：本轮以及后续线上回复都禁止发起线下邀约，messageActions.offlineInvitation 必须固定为 null。'
       : '',
+    context.mode === 'online' && includeOnlineReplyTools ? renderOnlineConditionalActionPrompt(context, characterName) : '',
     timeAwarenessPrompt,
     context.mode === 'online' && includeOnlineReplyTools ? renderCharacterEconomyPrompt(context) : '',
     includeMessageTime
       ? '时间判定规则：最近对话里的“发送时间”只表示那条历史消息实际发出的时间。回复时先以“现实时间感知”里的当前时间判断现在，再根据历史发送时间推算已经过去多久；不要把最后一条用户消息的发送时间当作当前时间。'
       : '',
-    `当前对话总结：\n${context.conversationSummary || '暂无总结。'}`,
-    `一起听状态：\n${renderMusicListeningPrompt(context)}`,
-    `记忆手册：\n${context.memorySummary || '暂无记忆手册。'}`,
-    `世界书：\n${renderWorldBooks(selectedWorldBooks, context) || '无启用条目。'}`,
+    context.conversationSummary ? `当前对话总结：\n${context.conversationSummary}` : '',
+    musicListeningPrompt ? `一起听状态：\n${musicListeningPrompt}` : '',
+    context.memorySummary ? `记忆手册：\n${context.memorySummary}` : '',
+    worldBookPrompt ? `世界书：\n${worldBookPrompt}` : '',
     context.mode === 'online' && includeOnlineReplyTools
-      ? 'Sticker / 图片 / 语音 / 定位 / 转账 / 一起听 / 网站链接规则：用户发送 Sticker 时，文字描述是用户提供的贴纸含义。用户发送真实图片时，若本次请求附带图片，你可以观察图片内容；用户发送文字描述卡片时，必须理解为“用户发送了一张图片，图片内容为描述文本”，虽然没有真实图片文件，也要按图片内容参与对话。用户或角色发送语音时，必须理解为对方用语音消息说出了对应文字内容，不要把它当成普通打字消息；角色也可以在合适时用 voice 项主动发送语音条。用户发送定位时，必须理解为用户把自己的当前位置发给了你，并告知了用户与角色之间的距离；角色也可以在合适时用 location 项主动发送自己的定位。用户发送转账时，必须理解为用户确实向你发起了对应金额的转账；你可以在后续按角色意愿接收或拒绝。角色也可以在合适时用 transfer 项主动向用户转账，等待用户接收或拒绝。用户发送一起听邀请时，必须理解为用户正在邀请你进入音乐页的一起听状态；你可以按关系和语境接受或拒绝。若你主动邀请用户一起听，先用普通 text 自然提出，再在 messageActions.musicListenInvite 写入邀请。一起听状态下你可以感知当前歌曲、播放进度和此刻歌词，也可以用 messageActions.musicActions 切歌、搜索播放或把当前/指定歌曲加入用户的“我的喜欢音乐”。用户发送网站链接卡片时，必须理解为用户转发了一个真实可读的网页链接给你，链接卡片附带的“网站内容”为你已经能看到的页面正文，可直接按其中内容参与对话。若未附带真实图片，不要臆造描述之外的图片细节。'
+      ? replaceTokens(onlineInputSemanticsPrompt, { '{{char}}': characterName })
       : '',
     context.mode === 'online' && includeOnlineReplyTools && options.includeAvailableStickers !== false ? `角色可用 Stickers：\n${renderAvailableStickers(context)}` : '',
     includeOnlineReplyTools ? renderProfileThemePrompt(context) : '',
     includeOnlineReplyTools ? renderThoughtChainThemePrompt(context) : '',
     context.mode === 'online' && context.replyInstruction ? `本次生成任务：\n${context.replyInstruction}` : '',
-    `最近对话：\n${history || '暂无。'}`
+    history ? `最近对话：\n${history}` : ''
   ].filter(Boolean).join('\n\n');
 }
 

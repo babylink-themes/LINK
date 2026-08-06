@@ -1,5 +1,5 @@
 import type { SmallTheaterTopic } from '@/types/domain';
-import { defaultSmallTheaterTopicDrafts } from '@/utils/smallTheater';
+import { defaultSmallTheaterTopicDrafts } from '@/utils/smallTheaterDefaults';
 
 export type SmallTheaterTopicCategoryId =
   | 'platform'

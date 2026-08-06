@@ -1,5 +1,6 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { App } from '@capacitor/app';
+import { appApiFetch, appApiUrl } from './appApi';
 
 export type NativeReleasePlatform = 'android' | 'ios';
 export type NativeReleasePhase = 'idle' | 'checking' | 'latest' | 'available' | 'opening' | 'unsupported' | 'error';
@@ -110,7 +111,7 @@ export async function checkNativeRelease(): Promise<NativeReleaseStatus> {
   const current = await resolveInstalledVersion(initial.platform);
   try {
     const params = new URLSearchParams({ platform: initial.platform, versionCode: String(current.versionCode) });
-    const response = await fetch(`/api/releases/latest?${params.toString()}`, { cache: 'no-store', credentials: 'same-origin' });
+    const response = await appApiFetch(`/api/releases/latest?${params.toString()}`, { cache: 'no-store', credentials: 'same-origin' });
     if (!response.ok) throw new Error(await responseError(response));
     const release = await response.json() as NativeRelease | { release: null; updateAvailable: false };
     if ('release' in release && release.release === null) {
@@ -133,7 +134,7 @@ export async function checkNativeRelease(): Promise<NativeReleaseStatus> {
 async function refreshDownloadTicket(release: NativeRelease) {
   if (release.downloadExpiresAt > Date.now() + 15_000) return release;
   const params = new URLSearchParams({ platform: release.platform, versionCode: '0' });
-  const response = await fetch(`/api/releases/latest?${params.toString()}`, { cache: 'no-store', credentials: 'same-origin' });
+  const response = await appApiFetch(`/api/releases/latest?${params.toString()}`, { cache: 'no-store', credentials: 'same-origin' });
   if (!response.ok) throw new Error(await responseError(response));
   const latestRelease = await response.json() as NativeRelease | { release: null };
   if ('release' in latestRelease) throw new Error('管理员尚未发布该平台安装包。');
@@ -162,7 +163,7 @@ function normalizedAndroidVerificationMetadata(release: NativeRelease) {
 
 export async function installNativeRelease(inputRelease: NativeRelease): Promise<NativeReleaseActionResult> {
   const release = await refreshDownloadTicket(inputRelease);
-  const absoluteUrl = new URL(release.downloadUrl, window.location.origin).toString();
+  const absoluteUrl = appApiUrl(release.downloadUrl);
   if (release.platform === 'android' && Capacitor.isNativePlatform()) {
     const installedVersion = await resolveInstalledVersion('android');
     if (installedVersion.versionCode <= LAST_ANDROID_VERSION_WITH_OPEN_INSTALL_STREAM) {
@@ -189,14 +190,14 @@ export async function installNativeRelease(inputRelease: NativeRelease): Promise
 }
 
 export async function fetchIosUpdateSourceLink() {
-  const response = await fetch('/api/releases/altstore/source-link', { cache: 'no-store', credentials: 'same-origin' });
+  const response = await appApiFetch('/api/releases/altstore/source-link', { cache: 'no-store', credentials: 'same-origin' });
   if (!response.ok) throw new Error(await responseError(response));
   return await response.json() as IosUpdateSourceLink;
 }
 
 export async function openNativeReleaseDownload(release: NativeRelease) {
   const refreshedRelease = await refreshDownloadTicket(release);
-  const absoluteUrl = new URL(refreshedRelease.downloadUrl, window.location.origin).toString();
+  const absoluteUrl = appApiUrl(refreshedRelease.downloadUrl);
   if (release.platform === 'android' && Capacitor.isNativePlatform()) {
     try {
       await LinkUpdater.openDownload({ url: absoluteUrl });

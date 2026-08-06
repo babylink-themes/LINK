@@ -104,6 +104,11 @@
               <template v-else>
                 <h4>{{ memoryText(episode.title) }}</h4>
                 <p>{{ memoryText(episode.narrative) }}</p>
+                <ul v-if="episode.eventBeats?.length" class="diary-detail-list">
+                  <li v-for="beat in episode.eventBeats" :key="`${episode.id}-${beat.order}`">
+                    <strong v-if="beat.timeText">{{ memoryText(beat.timeText) }}：</strong>{{ eventBeatText(beat) }}
+                  </li>
+                </ul>
                 <footer><span v-if="episode.location"><MapPin :size="12" />{{ memoryText(episode.location) }}</span><span v-if="episode.emotion"><Heart :size="12" />{{ memoryText(episode.emotion) }}</span><span v-if="episode.startFloor > 0"><Layers3 :size="12" />{{ episodeFloorLabel(episode) }}</span></footer>
                 <div v-if="episode.themeIds.length" class="tag-row"><span v-for="tag in themeNames(episode.themeIds).slice(0, 3)" :key="tag">#{{ memoryText(tag) }}</span></div>
               </template>
@@ -124,8 +129,9 @@
 
     <section v-else-if="activeTab === 'collections'" class="content-section">
       <div class="section-intro"><div><span class="eyebrow">MEMORY COLLECTIONS</span><h2>反复想起的主题</h2></div><Layers3 :size="23" class="section-icon" /></div>
-      <div class="collection-grid"><article v-for="theme in filteredThemes" :key="theme.id" class="collection-card"><header><span class="collection-symbol">#</span><div><h3>{{ memoryText(theme.name) }}</h3><small>{{ activeThemeAssertionCount(theme) }} 条有效认知 · {{ theme.episodeIds.length }} 段经历</small></div></header><p>{{ memoryText(theme.report) || '这个主题正在形成，等更多经历让它变得清晰。' }}</p><footer><span v-if="theme.reportAssertionCount >= 5"><Sparkles :size="12" />已整理成长期印象</span><span>{{ formatDate(theme.updatedAt) }} 更新</span></footer></article></div>
-      <p v-if="!filteredThemes.length" class="muted-empty">当相似的原子记忆反复出现，它们会自动聚成一个主题家族。</p>
+      <div class="collection-grid"><article v-for="theme in visibleThemes" :key="theme.id" class="collection-card"><header><span class="collection-symbol">#</span><div><h3>{{ memoryText(theme.name) }}</h3><small>{{ activeThemeAssertionCount(theme) }} 条有效认知 · {{ theme.episodeIds.length }} 段经历</small></div></header><p>{{ memoryText(theme.report) || '这个主题正在形成，等更多经历让它变得清晰。' }}</p><footer><span v-if="theme.reportAssertionCount >= 5"><Sparkles :size="12" />已整理成长期印象</span><span>{{ formatDate(theme.updatedAt) }} 更新</span></footer></article></div>
+      <button v-if="remainingThemes > 0" class="diary-load-more" type="button" @click="loadMoreThemes">再看更早的 {{ Math.min(themePageSize, remainingThemes) }} 个主题<span>还剩 {{ remainingThemes }} 个</span></button>
+      <p v-if="!visibleThemes.length" class="muted-empty">当相似的原子记忆反复出现，它们会自动聚成一个主题家族。</p>
     </section>
 
     <section v-else class="content-section archive-section">
@@ -138,6 +144,7 @@
         <footer v-if="editingAssertionId === assertion.id"><button type="button" @click="cancelCorrection">取消</button><button class="save-button" type="button" :disabled="!correctionDraft.trim()" @click="saveCorrection(assertion)">保存纠正</button></footer><footer v-else><div class="tag-row"><span v-for="tag in themeNames(assertion.themeIds).slice(0, 3)" :key="tag">#{{ memoryText(tag) }}</span></div><div class="archive-actions"><button type="button" @click="startCorrection(assertion)"><Pencil :size="13" />纠正</button><button type="button" @click="confirmingForgetId = assertion.id"><EyeOff :size="13" />遗忘</button></div></footer>
         <div v-if="confirmingForgetId === assertion.id" class="forget-row"><span>让角色忘掉这条可召回认知？</span><button type="button" @click="confirmingForgetId = ''">取消</button><button class="danger-button" type="button" @click="forgetAssertion(assertion)">确认</button></div>
       </article>
+      <button v-if="remainingAssertions > 0" class="diary-load-more" type="button" @click="loadMoreAssertions">再看更早的 {{ Math.min(assertionPageSize, remainingAssertions) }} 条<span>还剩 {{ remainingAssertions }} 条</span></button>
       <p v-if="!visibleAssertions.length" class="muted-empty">还没有可管理的原子认知。</p>
     </section>
   </section>
@@ -150,18 +157,24 @@ import { useAppStore } from '@/stores/appStore';
 import type { ChatMemorySettings } from '@/types/domain';
 import type { MemoryAssertion, MemoryChannel, MemoryEpisode, MemoryStateKind, MemoryStateSnapshot, MemoryTheme } from '@/types/memory';
 import { getCharacterAiName } from '@/utils/character';
+import { compareMemoryEpisodeTimeline, memoryEpisodeTimelineAt } from '@/utils/memoryGraph';
 import { chatMemorySettingLimits, normalizeChatMemorySetting } from '@/utils/memorySettings';
 import { getUserAiName } from '@/utils/profile';
+import { normalizeNarrativeText } from '@/utils/structuredText';
 
 type MemoryTab = 'diary' | 'us' | 'collections' | 'archive';
 type DiaryGroup = { label: string; entries: MemoryEpisode[] };
 const diaryPageSize = 20;
+const themePageSize = 30;
+const assertionPageSize = 40;
 
 const props = withDefaults(defineProps<{ conversationId: string; surface?: 'embedded' | 'page' }>(), { surface: 'embedded' });
 const store = useAppStore();
 const activeTab = ref<MemoryTab>('diary');
 const searchQuery = ref('');
 const visibleDiaryCount = ref(diaryPageSize);
+const visibleThemeCount = ref(themePageSize);
+const visibleAssertionCount = ref(assertionPageSize);
 const settingsExpanded = ref(false);
 const capturing = ref(false);
 const rebuilding = ref(false);
@@ -183,13 +196,13 @@ const character = computed(() => conversation.value ? store.characterById(conver
 const boundUser = computed(() => conversation.value ? store.userById(conversation.value.userId) : undefined);
 const characterName = computed(() => character.value ? getCharacterAiName(character.value) : '角色');
 const userName = computed(() => boundUser.value ? getUserAiName(boundUser.value) : '用户');
-const graph = computed(() => store.memoryGraphForConversation(props.conversationId));
+const graph = computed(() => store.memoryGraphForConversation(props.conversationId, { includeEdges: false, includeEmbeddings: false, resolveEpisodeSources: false }));
 const currentSettings = computed(() => store.settingsForConversation(props.conversationId));
 const effectiveEmbeddingModel = computed(() => currentSettings.value.modelOverrides.embedding.trim() || store.settings?.modelOverrides.embedding.trim() || memoryDraft.embeddingModel.trim());
 const stats = computed(() => store.memoryCompressionStatsForConversation(props.conversationId));
 const captureStatus = computed(() => store.memoryCaptureStatusForConversation(props.conversationId));
 const busy = computed(() => capturing.value || rebuilding.value || Boolean(regeneratingEpisodeId.value) || Boolean(deletingEpisodeId.value));
-const timeline = computed(() => [...graph.value.episodes].filter((episode) => episode.status === 'active').sort((left, right) => (right.occurredAt || 0) - (left.occurredAt || 0)));
+const timeline = computed(() => [...graph.value.episodes].filter((episode) => episode.status === 'active').sort((left, right) => compareMemoryEpisodeTimeline(right, left)));
 const activeAssertions = computed(() => graph.value.assertions.filter((assertion) => ['current', 'open', 'disputed'].includes(assertion.status)).sort((left, right) => Number(right.pinned) - Number(left.pinned) || right.updatedAt - left.updatedAt));
 const userEntityId = computed(() => graph.value.entities.find((entity) => entity.type === 'user')?.id ?? `${graph.value.brainId}:user`);
 const normalizedQuery = computed(() => normalizeSearch(searchQuery.value));
@@ -197,14 +210,27 @@ const filteredTimeline = computed(() => !normalizedQuery.value ? timeline.value 
 const visibleTimeline = computed(() => filteredTimeline.value.slice(0, visibleDiaryCount.value));
 const remainingDiaryEntries = computed(() => Math.max(0, filteredTimeline.value.length - visibleTimeline.value.length));
 const filteredThemes = computed(() => [...graph.value.themes].filter((theme) => !normalizedQuery.value || normalizeSearch(`${theme.name} ${theme.report} ${theme.description}`).includes(normalizedQuery.value)).sort((left, right) => right.updatedAt - left.updatedAt));
-const visibleAssertions = computed(() => activeAssertions.value.filter((assertion) => !normalizedQuery.value || normalizeSearch(`${assertion.perspectiveText} ${assertion.searchText}`).includes(normalizedQuery.value)));
+const visibleThemes = computed(() => filteredThemes.value.slice(0, visibleThemeCount.value));
+const remainingThemes = computed(() => Math.max(0, filteredThemes.value.length - visibleThemes.value.length));
+const filteredAssertions = computed(() => activeAssertions.value.filter((assertion) => !normalizedQuery.value || normalizeSearch(`${assertion.perspectiveText} ${assertion.searchText}`).includes(normalizedQuery.value)));
+const visibleAssertions = computed(() => filteredAssertions.value.slice(0, visibleAssertionCount.value));
+const remainingAssertions = computed(() => Math.max(0, filteredAssertions.value.length - visibleAssertions.value.length));
 const relationshipAssertions = computed(() => activeAssertions.value.filter((assertion) => assertion.subjectEntityId === userEntityId.value || ['relationship', 'conflict', 'promise', 'open-loop', 'boundary', 'impression'].includes(assertion.kind)).slice(0, 20));
-const relationshipStates = computed(() => graph.value.stateSnapshots.filter((state) => ['relationship', 'user-impression'].includes(state.kind)).sort((left, right) => right.createdAt - left.createdAt).slice(0, 8));
+const relationshipStates = computed(() => graph.value.stateSnapshots.filter((state) => ['relationship', 'user-impression'].includes(state.kind)).sort((left, right) => (right.occurredAt || right.createdAt) - (left.occurredAt || left.createdAt)).slice(0, 8));
 const compressionHeadline = computed(() => stats.value.archivedFloors ? `我已经把 ${stats.value.archivedFloors} 个旧楼层收进日记` : '日记会在对话积累后接管旧楼层');
+const themeNameById = computed(() => new Map(graph.value.themes.map((theme) => [theme.id, theme.name])));
+const entityNameById = computed(() => new Map(graph.value.entities.map((entity) => [entity.id, entity.name])));
+const activeAssertionCountByThemeId = computed(() => {
+  const counts = new Map<string, number>();
+  for (const assertion of activeAssertions.value) {
+    for (const themeId of assertion.themeIds) counts.set(themeId, (counts.get(themeId) ?? 0) + 1);
+  }
+  return counts;
+});
 const diaryGroups = computed<DiaryGroup[]>(() => {
   const groups = new Map<string, MemoryEpisode[]>();
   for (const episode of visibleTimeline.value) {
-    const date = new Date(episode.occurredAt || episode.createdAt || Date.now());
+    const date = new Date(memoryEpisodeTimelineAt(episode) || episode.createdAt || Date.now());
     const label = `${date.getFullYear()}年${date.getMonth() + 1}月`;
     groups.set(label, [...(groups.get(label) ?? []), episode]);
   }
@@ -218,11 +244,17 @@ const tabs = [
 ];
 
 watch(currentSettings, (settings) => Object.assign(memoryDraft, settings.memory), { immediate: true });
-watch(searchQuery, () => { visibleDiaryCount.value = diaryPageSize; });
+watch(searchQuery, () => {
+  visibleDiaryCount.value = diaryPageSize;
+  visibleThemeCount.value = themePageSize;
+  visibleAssertionCount.value = assertionPageSize;
+});
 watch(() => props.conversationId, () => {
   activeTab.value = 'diary';
   searchQuery.value = '';
   visibleDiaryCount.value = diaryPageSize;
+  visibleThemeCount.value = themePageSize;
+  visibleAssertionCount.value = assertionPageSize;
   editingEpisodeId.value = '';
   regeneratingEpisodeId.value = '';
   deletingEpisodeId.value = '';
@@ -346,6 +378,14 @@ function loadMoreDiaryEntries() {
   visibleDiaryCount.value += diaryPageSize;
 }
 
+function loadMoreThemes() {
+  visibleThemeCount.value += themePageSize;
+}
+
+function loadMoreAssertions() {
+  visibleAssertionCount.value += assertionPageSize;
+}
+
 async function togglePinned(assertion: MemoryAssertion) { await store.setMemoryAssertionPinned(assertion.id, !assertion.pinned); }
 function startCorrection(assertion: MemoryAssertion) { editingAssertionId.value = assertion.id; correctionDraft.value = memoryText(assertion.perspectiveText); confirmingForgetId.value = ''; }
 function cancelCorrection() { editingAssertionId.value = ''; correctionDraft.value = ''; }
@@ -353,11 +393,12 @@ async function saveCorrection(assertion: MemoryAssertion) { if (!correctionDraft
 async function forgetAssertion(assertion: MemoryAssertion) { await store.forgetMemoryAssertion(assertion.id); confirmingForgetId.value = ''; setMessage('这条认知不再参与角色回复。', 'success'); }
 function setMessage(message: string, tone: 'success' | 'warning') { actionMessage.value = message; actionTone.value = tone; window.setTimeout(() => { if (actionMessage.value === message) actionMessage.value = ''; }, 4500); }
 function normalizeSearch(value: string) { return String(value ?? '').normalize('NFKC').toLocaleLowerCase().replace(/[\s\p{P}\p{S}]+/gu, ''); }
-function memoryText(value: string) { return String(value ?? ''); }
+function memoryText(value: string) { return normalizeNarrativeText(value); }
+function eventBeatText(beat: NonNullable<MemoryEpisode['eventBeats']>[number]) { return [...beat.actions, ...beat.dialogueFacts, ...beat.changes, ...beat.commitments, ...beat.unresolvedQuestions].join('；'); }
 function episodeFloorLabel(episode: MemoryEpisode) { return episode.startFloor === episode.endFloor ? `第 ${episode.startFloor} 楼` : `第 ${episode.startFloor}–${episode.endFloor} 楼`; }
-function themeNames(themeIds: string[]) { const map = new Map(graph.value.themes.map((theme) => [theme.id, theme.name])); return themeIds.map((id) => map.get(id)).filter((name): name is string => Boolean(name)); }
-function activeThemeAssertionCount(theme: MemoryTheme) { return activeAssertions.value.filter((assertion) => theme.assertionIds.includes(assertion.id)).length; }
-function subjectName(entityId: string) { return memoryText(graph.value.entities.find((entity) => entity.id === entityId)?.name || '这件事'); }
+function themeNames(themeIds: string[]) { return themeIds.map((id) => themeNameById.value.get(id)).filter((name): name is string => Boolean(name)); }
+function activeThemeAssertionCount(theme: MemoryTheme) { return activeAssertionCountByThemeId.value.get(theme.id) ?? 0; }
+function subjectName(entityId: string) { return memoryText(entityNameById.value.get(entityId) || '这件事'); }
 function dayOf(timestamp: number) { return String(new Date(timestamp || Date.now()).getDate()).padStart(2, '0'); }
 function formatDate(timestamp: number) { return Number.isFinite(timestamp) && timestamp > 0 ? new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(timestamp) : '时间未标记'; }
 function channelLabel(channel: MemoryChannel) { return ({ online: '线上', offline: '线下', group: '群聊', voom: '动态', 'couple-space': '共同空间', call: '通话', system: '纠正' } satisfies Record<MemoryChannel, string>)[channel]; }

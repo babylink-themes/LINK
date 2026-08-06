@@ -37,10 +37,12 @@ const FavoritesPage = () => import('@/pages/FavoritesPage.vue');
 const RingtoneSettingsPage = () => import('@/pages/RingtoneSettingsPage.vue');
 const ThemesPage = () => import('@/pages/ThemesPage.vue');
 const OnlineChatCardGalleryPage = () => import('@/pages/OnlineChatCardGalleryPage.vue');
+const NativeAccessPage = () => import('@/pages/NativeAccessPage.vue');
 
 export const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
+    { path: '/access', name: 'native-access', component: NativeAccessPage },
     { path: '/', redirect: '/home' },
     { path: '/home', name: 'home', component: HomePage },
     { path: '/profile', redirect: '/account' },

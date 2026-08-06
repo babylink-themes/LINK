@@ -1,6 +1,7 @@
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
 import { App as CapacitorApp } from '@capacitor/app';
+import { Capacitor } from '@capacitor/core';
 import App from './App.vue';
 import { router } from './router';
 import { syncAppViewportHeight } from './app/viewport';
@@ -12,6 +13,7 @@ import { installStartupCachePersistence, markStartupCacheHydrated, persistStartu
 import { useAppStore } from './stores/appStore';
 import { requestPersistentStorage, setupPwaInstallPrompt } from './utils/storageProtection';
 import { installNativeSystemBars } from './services/systemBars';
+import { getAppApiOrigin, isNativeAppRuntime } from './services/appApi';
 import './styles/main.css';
 
 let activeStore: ReturnType<typeof useAppStore> | null = null;
@@ -20,7 +22,7 @@ const pendingNotificationClicks: LinkNotificationEventPayload[] = [];
 function navigateNotificationUrl(url: string) {
 	try {
 		const target = new URL(url, window.location.origin);
-		if (target.origin !== window.location.origin) return;
+		if (target.origin !== window.location.origin && (!isNativeAppRuntime() || target.origin !== getAppApiOrigin())) return;
 		void router.push(`${target.pathname}${target.search}${target.hash}`);
 	} catch {
 		return;
@@ -90,7 +92,7 @@ if (import.meta.env.DEV && 'serviceWorker' in navigator) {
 }
 
 async function bootstrap() {
-	if (!await ensureAccessOnStartup()) return;
+	const accessGranted = await ensureAccessOnStartup();
 	const app = createApp(App);
 	const pinia = createPinia();
 
@@ -100,12 +102,16 @@ async function bootstrap() {
 	activeStore = store;
 	restoreStartupCache(store);
 	await restoreStartupSettingsFromDb(store);
+	if (!accessGranted && Capacitor.isNativePlatform()) {
+		await router.replace('/access');
+	}
 	try {
 		app.mount('#app');
 	} catch (error) {
 		console.error('Link mount failed.', error);
 		return;
 	}
+	if (!accessGranted) return;
 	if (pendingNotificationClicks.length) {
 		const queuedClicks = pendingNotificationClicks.splice(0);
 		queuedClicks.forEach((payload) => void handleNotificationClick(payload));

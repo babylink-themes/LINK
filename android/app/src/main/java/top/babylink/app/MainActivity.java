@@ -10,7 +10,7 @@ import com.getcapacitor.BridgeActivity;
 import org.json.JSONObject;
 
 public class MainActivity extends BridgeActivity {
-	private static final String APP_HOME_URL = "https://babylink.top/home";
+	private static final String APP_HOME_URL = "http://localhost/home";
 	private String pendingNotificationUrl;
 	private String pendingNotificationKind = "message";
 	private String pendingNotificationAction = "open";
@@ -26,6 +26,7 @@ public class MainActivity extends BridgeActivity {
 		registerPlugin(LinkMediaPlugin.class);
 		registerPlugin(LinkBackupPlugin.class);
 		registerPlugin(LinkStoragePlugin.class);
+		registerPlugin(LinkSessionPlugin.class);
 		registerPlugin(LinkDisplayPlugin.class);
 		registerPlugin(LinkRealityPlugin.class);
 		registerPlugin(LinkMcpLocalPlugin.class);

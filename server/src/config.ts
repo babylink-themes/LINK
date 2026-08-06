@@ -23,6 +23,7 @@ const nodeEnv = String(process.env.NODE_ENV ?? 'development').trim();
 const production = nodeEnv === 'production';
 const appOrigin = String(process.env.APP_ORIGIN ?? 'http://localhost:3000').replace(/\/+$/, '');
 const bridgeReleaseBaseUrl = String(process.env.BRIDGE_RELEASE_BASE_URL ?? 'https://github.com/babylink-themes/LINK/releases/download').replace(/\/+$/, '');
+const configuredNativeApiOrigins = readList('NATIVE_API_ORIGINS');
 
 try {
   new URL(appOrigin);
@@ -54,6 +55,7 @@ export const config = {
   cookieSecure: readBoolean('COOKIE_SECURE', production),
   cookieName: String(process.env.SESSION_COOKIE_NAME ?? 'link_session'),
   sessionDays: readInteger('SESSION_DAYS', 30, 1, 180),
+  sessionCacheSeconds: readInteger('SESSION_CACHE_SECONDS', 60, 5, 300),
   offlineLeaseHours: readInteger('OFFLINE_LEASE_HOURS', 24, 1, 168),
   membershipMaxAgeHours: readInteger('MEMBERSHIP_MAX_AGE_HOURS', 48, 1, 720),
   challengeMinutes: readInteger('CHALLENGE_MINUTES', 5, 1, 30),
@@ -78,5 +80,8 @@ export const config = {
   upstreamTimeoutMs: readInteger('UPSTREAM_TIMEOUT_MS', 45_000, 2_000, 180_000),
   modelRequestTimeoutMs: readInteger('MODEL_REQUEST_TIMEOUT_MS', 600_000, 4_000, 1_200_000),
   groupSyncMinutes: readInteger('GROUP_SYNC_MINUTES', 360, 10, 1440),
-  auditRetentionDays: readInteger('AUDIT_RETENTION_DAYS', 90, 7, 730)
+  auditRetentionDays: readInteger('AUDIT_RETENTION_DAYS', 90, 7, 730),
+  nativeApiOrigins: configuredNativeApiOrigins.length
+    ? configuredNativeApiOrigins
+    : ['capacitor://localhost', 'http://localhost', 'https://localhost']
 } as const;

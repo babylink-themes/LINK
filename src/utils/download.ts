@@ -1,4 +1,5 @@
 import { isNativeImageSaveAvailable, saveNativeImage } from '@/services/nativeMedia';
+import { appApiFetch } from '@/services/appApi';
 import { dataUrlToBlob, isLocalMediaCacheUrl, resolveLocalMediaBlob } from '@/utils/mediaStorage';
 
 function extensionFromMimeType(mimeType: string) {
@@ -54,7 +55,7 @@ async function fetchImage(source: string) {
   }
   if (/^https?:\/\//i.test(source)) {
     try {
-      const response = await fetch(`/__image-download?url=${encodeURIComponent(source)}`);
+      const response = await appApiFetch(`/__image-download?url=${encodeURIComponent(source)}`);
       if (response.ok) return response;
       throw new Error(`HTTP ${response.status}`);
     } catch (error) {

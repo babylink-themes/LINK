@@ -11,6 +11,7 @@ import { Share } from '@capacitor/share';
 import { Readability } from '@mozilla/readability';
 import type { AppSettings, McpServerConfig, RealityRecurrenceRule } from '@/types/domain';
 import { createActiveTimeout, isFetchInterruptedError, waitForActiveNetworkWindow } from '@/utils/activeTimeout';
+import { appApiFetch } from './appApi';
 import { synthesizeSpeech } from '@/services/tts';
 import { androidNotificationInboxAvailable, androidRealityAvailable, clearAndroidNotificationInbox, getAndroidAppUsage, getAndroidAppUsageAccess, getAndroidNotificationInbox, getAndroidNotificationInboxAccess, openAndroidAppSettings, openAndroidAppUsageSettings, openAndroidNotificationInboxSettings, openAndroidSystemWeather, setAndroidSystemAlarm } from '@/services/nativeReality';
 
@@ -702,7 +703,7 @@ async function fetchProxiedText(target: URL, accept: string, timeoutMs = 20_000,
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const timeout = createActiveTimeout(timeoutMs);
     try {
-      const response = await fetch(`${proxyPath}?url=${encodeURIComponent(target.href)}`, {
+      const response = await appApiFetch(`${proxyPath}?url=${encodeURIComponent(target.href)}`, {
         headers: { Accept: accept },
         credentials: 'same-origin',
         cache: 'no-store',

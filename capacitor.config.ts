@@ -5,11 +5,6 @@ const config: CapacitorConfig = {
   appId: 'top.babylink.app',
   appName: 'BabyLink',
   webDir: 'dist',
-  server: {
-    url: 'https://babylink.top/home',
-    cleartext: false,
-    allowNavigation: ['babylink.top']
-  },
   android: {
     allowMixedContent: false
   },

@@ -20,6 +20,17 @@ export type MemoryEpisodeForgottenReason = 'user-request' | 'source-invalidated'
 
 export type MemoryTemporalBasis = 'message-time' | 'sequence-only' | 'story-time';
 
+export type MemoryStoryTimeKind = 'exact' | 'relative' | 'sequence' | 'unknown';
+
+export interface MemoryStoryTime {
+  kind: MemoryStoryTimeKind;
+  text?: string;
+  occurredAt?: number;
+  relativeOffsetMs?: number;
+  sequence?: number;
+  confidence: number;
+}
+
 export type MemoryLocationActor = 'character' | 'user' | 'shared-scene' | 'unknown';
 
 export type MemoryLocationSource = 'attachment' | 'explicit-text' | 'offline-scene' | 'inferred' | 'manual';
@@ -32,6 +43,25 @@ export interface MemoryEpisodeLocation {
   distance?: string;
   evidenceMessageIds: string[];
   confidence: number;
+}
+
+export interface MemoryEventBeat {
+  order: number;
+  sourceMessageIds: string[];
+  timeText?: string;
+  location?: MemoryEpisodeLocation;
+  participants: string[];
+  actions: string[];
+  dialogueFacts: string[];
+  changes: string[];
+  commitments: string[];
+  unresolvedQuestions: string[];
+}
+
+export interface MemoryDiaryCoverage {
+  coveredMessageIds: string[];
+  omittedMessageIds: string[];
+  omissionReasons: string[];
 }
 
 export interface MemoryGenerationMetadata {
@@ -72,6 +102,10 @@ export interface MemoryEpisode {
   occurredAt: number;
   occurredEndAt?: number;
   temporalBasis?: MemoryTemporalBasis;
+  storyTime?: MemoryStoryTime;
+  eventBeats?: MemoryEventBeat[];
+  coverage?: MemoryDiaryCoverage;
+  stateDeltas?: MemoryExtractionStateDelta[];
   timeAwarenessEnabled?: boolean;
   timeZone?: string;
   generation?: MemoryGenerationMetadata;
@@ -169,6 +203,7 @@ export interface MemoryStateSnapshot {
   sourceAssertionIds: string[];
   sourceEpisodeIds: string[];
   previousSnapshotId?: string;
+  occurredAt?: number;
   createdAt: number;
 }
 
@@ -225,6 +260,13 @@ export interface MemoryExtractionStateDelta {
   }>;
 }
 
+export interface MemoryLifecycleActionDraft {
+  type: 'resolve' | 'cancel';
+  targetAssertionId: string;
+  evidenceMessageIds: string[];
+  reason: string;
+}
+
 export interface MemoryExtractionLocationDraft {
   actor: MemoryLocationActor;
   source: MemoryLocationSource;
@@ -244,10 +286,14 @@ export interface MemoryExtractionResult {
   valence: number;
   arousal: number;
   salience: number;
+  storyTime?: MemoryStoryTime;
+  eventBeats: MemoryEventBeat[];
+  coverage?: MemoryDiaryCoverage;
   entities: MemoryExtractionEntityDraft[];
   assertions: MemoryExtractionAssertionDraft[];
   themes: string[];
   stateDeltas: MemoryExtractionStateDelta[];
+  lifecycleActions: MemoryLifecycleActionDraft[];
   generation?: MemoryGenerationMetadata;
 }
 

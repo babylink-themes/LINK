@@ -1,4 +1,5 @@
 import type { MusicSource, MusicTrack } from '@/types/domain';
+import { appApiFetch } from './appApi';
 
 const musicApiEndpoint = 'https://music-api.gdstudio.xyz/api.php';
 const textProxyPath = '/__text-proxy';
@@ -41,7 +42,7 @@ function createMusicRequestUrl(url: string) {
 }
 
 async function fetchMusicJson(url: string) {
-  const response = await fetch(createMusicRequestUrl(url));
+  const response = await appApiFetch(createMusicRequestUrl(url));
   if (!response.ok) throw new Error(`GD 音乐台请求失败：${response.status}`);
   return response.json();
 }

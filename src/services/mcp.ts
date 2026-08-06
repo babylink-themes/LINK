@@ -1,5 +1,6 @@
 import type { AppSettings, CharacterProfile, ChatMcpResultAttachment, McpServerConfig, McpServerKind, McpToolDefinition } from '@/types/domain';
 import { createBuiltinNotificationInboxMcpServer, createBuiltinRealityMcpServer, notificationInboxMcpTools, realityMcpTools } from '@/data/realityMcp';
+import { appApiFetch } from './appApi';
 import { fetchNativeMcpLocal, nativeMcpLocalAvailable } from '@/services/nativeMcpLocal';
 import { executeRealityMcpTool } from '@/services/realityMcp';
 import { createActiveTimeout, isFetchInterruptedError, waitForActiveNetworkWindow } from '@/utils/activeTimeout';
@@ -203,7 +204,7 @@ async function parseMcpProxyJson<T>(response: Response, fallbackMessage: string)
 }
 
 async function fetchMcpProxyJob(transport: McpTransport, init: RequestInit, signal: AbortSignal) {
-  const startResponse = await fetch(transport.jobUrl, {
+  const startResponse = await appApiFetch(transport.jobUrl, {
     method: 'POST',
     headers: init.headers,
     body: init.body,
@@ -217,7 +218,7 @@ async function fetchMcpProxyJob(transport: McpTransport, init: RequestInit, sign
   if (!jobId) throw new McpTransportError('MCP 后台作业没有返回 ID。');
 
   while (true) {
-    const resultResponse = await fetch(`${transport.jobStatusBaseUrl}${encodeURIComponent(jobId)}`, {
+    const resultResponse = await appApiFetch(`${transport.jobStatusBaseUrl}${encodeURIComponent(jobId)}`, {
       headers: { Accept: 'application/json' },
       credentials: 'same-origin',
       cache: 'no-store',
@@ -366,7 +367,7 @@ class McpHttpSession {
         ? await fetchMcpProxyJob(this.transport, requestInit, timeout.signal)
         : this.transport.nativeLocal
           ? await fetchNativeMcpLocal(this.transport.url, requestInit, this.server.timeoutMs)
-          : await fetch(this.transport.url, requestInit);
+          : await appApiFetch(this.transport.url, requestInit);
       const responseSessionId = response.headers.get('mcp-session-id')?.trim();
       if (responseSessionId) this.sessionId = responseSessionId;
       if (!response.ok) {
@@ -462,7 +463,7 @@ class McpHttpSession {
         keepalive: true
       };
       if (this.transport.nativeLocal) await fetchNativeMcpLocal(this.transport.url, requestInit, Math.min(5_000, this.server.timeoutMs));
-      else await fetch(this.transport.url, requestInit);
+      else await appApiFetch(this.transport.url, requestInit);
     } catch {
       return;
     } finally {

@@ -1298,6 +1298,24 @@ const virtualMessageTotalSize = computed(() => messageVirtualizer.value.getTotal
 function measureVirtualMessageElement(element: unknown) {
   if (element instanceof Element) messageVirtualizer.value.measureElement(element);
 }
+const loadingEarlierMessages = ref(false);
+async function loadEarlierMessagesIfNeeded() {
+  const messageList = messageListRef.value;
+  if (!messageList || loadingEarlierMessages.value || messageList.scrollTop > 180) return;
+  const firstVisibleRow = virtualMessageRows.value[0];
+  const anchorMessageId = firstVisibleRow ? onlineMessageEntries.value[firstVisibleRow.index]?.message.id ?? '' : '';
+  loadingEarlierMessages.value = true;
+  shouldStickToBottom.value = false;
+  try {
+    const page = await store.loadEarlierConversationMessages(props.id);
+    if (!page.messages.length || !anchorMessageId) return;
+    await nextTick();
+    const anchorIndex = onlineMessageEntries.value.findIndex((entry) => entry.message.id === anchorMessageId);
+    if (anchorIndex >= 0) messageVirtualizer.value.scrollToIndex(anchorIndex, { align: 'start', behavior: 'auto' });
+  } finally {
+    loadingEarlierMessages.value = false;
+  }
+}
 const selectedMessageIdSet = computed(() => new Set(selectedMessageIds.value));
 function shouldHideAvatar(index: number) {
   if (!chatSettings.value.appearance.showOnlyFirstAvatarInReply) return false;
@@ -1793,7 +1811,11 @@ function focusedMessageId() {
 }
 
 async function scrollToOnlineMessage(messageId: string) {
-  const targetIndex = allOnlineMessages.value.findIndex((message) => message.id === messageId);
+  let targetIndex = allOnlineMessages.value.findIndex((message) => message.id === messageId);
+  if (targetIndex < 0) {
+    await store.ensureAllMessagesLoaded();
+    targetIndex = allOnlineMessages.value.findIndex((message) => message.id === messageId);
+  }
   if (targetIndex < 0) return false;
   shouldStickToBottom.value = false;
   messageVirtualizer.value.scrollToIndex(targetIndex, { align: 'center', behavior: 'auto' });
@@ -1883,6 +1905,7 @@ function handleStickerPanelHeightChange(height: number) {
 
 function handleMessageListScroll() {
   shouldStickToBottom.value = isMessageListNearBottom();
+  void loadEarlierMessagesIfNeeded();
 }
 
 function resumeActiveCallFromStore() {

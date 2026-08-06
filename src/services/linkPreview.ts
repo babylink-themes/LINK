@@ -1,4 +1,5 @@
 import type { ChatLinkPreviewAttachment, ChatLinkPreviewPlatform } from '@/types/domain';
+import { appApiFetch } from './appApi';
 
 type LinkPreviewResponse = Partial<ChatLinkPreviewAttachment>;
 
@@ -92,7 +93,7 @@ export function createChatLinkPreview(content: string): ChatLinkPreviewAttachmen
 
 export async function fetchChatLinkPreview(fallback: ChatLinkPreviewAttachment) {
   try {
-    const response = await fetch('/api/link-preview', {
+    const response = await appApiFetch('/api/link-preview', {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },

@@ -1,3 +1,5 @@
+import { appApiFetch, appApiUrl } from './appApi';
+
 export type DesktopBridgePlatform = 'desktop-macos' | 'desktop-windows';
 
 export interface DesktopBridgeRelease {
@@ -20,7 +22,7 @@ async function responseError(response: Response) {
 
 export async function fetchDesktopBridgeRelease(platform: DesktopBridgePlatform) {
   const params = new URLSearchParams({ platform, versionCode: '0' });
-  const response = await fetch(`/api/releases/latest?${params.toString()}`, { cache: 'no-store', credentials: 'same-origin' });
+  const response = await appApiFetch(`/api/releases/latest?${params.toString()}`, { cache: 'no-store', credentials: 'same-origin' });
   if (!response.ok) throw new Error(await responseError(response));
   const payload = await response.json() as DesktopBridgeRelease | { release: null };
   return 'release' in payload ? null : payload;
@@ -38,7 +40,7 @@ export async function downloadDesktopBridgeRelease(inputRelease: DesktopBridgeRe
   const extension = release.platform === 'desktop-macos' ? 'dmg' : 'exe';
   const platformName = release.platform === 'desktop-macos' ? 'mac' : 'windows';
   const downloadLink = document.createElement('a');
-  downloadLink.href = new URL(release.downloadUrl, window.location.origin).toString();
+  downloadLink.href = appApiUrl(release.downloadUrl);
   downloadLink.download = `BabyLink-Bridge-${release.versionName}-${platformName}.${extension}`;
   downloadLink.rel = 'noopener';
   downloadLink.style.display = 'none';

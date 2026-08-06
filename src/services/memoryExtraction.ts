@@ -4,8 +4,10 @@ import { jsonrepair } from 'jsonrepair';
 import type {
   MemoryAssertion,
   MemoryAssertionKind,
+  MemoryDiaryCoverage,
   MemoryEntityType,
   MemoryEpistemicKind,
+  MemoryEventBeat,
   MemoryExtractionAssertionDraft,
   MemoryExtractionEntityDraft,
   MemoryExtractionLocationDraft,
@@ -14,12 +16,15 @@ import type {
   MemoryGenerationMetadata,
   MemoryLocationActor,
   MemoryLocationSource,
+  MemoryLifecycleActionDraft,
   MemoryStateKind,
+  MemoryStoryTime,
   MemoryTheme,
 } from '@/types/memory';
 import { formatUserTimePreview } from '@/utils/timeAwareness';
 import { formatChatMcpOperations } from '@/utils/mcpOperations';
-import { extractCompleteJsonObject, normalizeNarrativeText } from '@/utils/structuredText';
+import { extractCompleteJsonObject, limitNarrativeText, normalizeNarrativeText } from '@/utils/structuredText';
+import { fallbackMemoryNarrative, parseLooseMemoryJson } from '@/utils/memoryExtractionParsing';
 import { isNonRetryableTextApiError } from '@/utils/textApiErrors';
 
 export interface ExtractTemporalMemoryInput {
@@ -43,6 +48,7 @@ const epistemicKinds = new Set<MemoryEpistemicKind>(['told', 'observed', 'inferr
 const stateKinds = new Set<MemoryStateKind>(['relationship', 'user-impression', 'adaptive-personality', 'mood', 'current-context']);
 const locationActors = new Set<MemoryLocationActor>(['character', 'user', 'shared-scene', 'unknown']);
 const locationSources = new Set<MemoryLocationSource>(['attachment', 'explicit-text', 'offline-scene', 'inferred']);
+const storyTimeKinds = new Set<MemoryStoryTime['kind']>(['exact', 'relative', 'sequence', 'unknown']);
 
 interface MemoryStageGenerationMetadata {
   complete: boolean;
@@ -51,8 +57,8 @@ interface MemoryStageGenerationMetadata {
   repairedJson: boolean;
 }
 
-export type TemporalMemoryDiaryResult = Pick<MemoryExtractionResult, 'title' | 'narrative' | 'location' | 'locations' | 'emotion' | 'valence' | 'arousal' | 'salience'> & { generation: MemoryStageGenerationMetadata };
-export type TemporalMemoryGraphResult = Pick<MemoryExtractionResult, 'entities' | 'assertions' | 'themes' | 'stateDeltas'> & { generation: MemoryStageGenerationMetadata };
+export type TemporalMemoryDiaryResult = Pick<MemoryExtractionResult, 'title' | 'narrative' | 'location' | 'locations' | 'emotion' | 'valence' | 'arousal' | 'salience' | 'storyTime' | 'eventBeats' | 'coverage'> & { generation: MemoryStageGenerationMetadata };
+export type TemporalMemoryGraphResult = Pick<MemoryExtractionResult, 'entities' | 'assertions' | 'themes' | 'stateDeltas' | 'lifecycleActions'> & { generation: MemoryStageGenerationMetadata };
 export interface TemporalMemoryExtractionResult extends MemoryExtractionResult {
   generation: MemoryGenerationMetadata;
 }
@@ -70,10 +76,14 @@ export async function extractTemporalMemory(input: ExtractTemporalMemoryInput): 
     valence: diary.valence,
     arousal: diary.arousal,
     salience: diary.salience,
+    storyTime: diary.storyTime,
+    eventBeats: diary.eventBeats,
+    coverage: diary.coverage,
     entities: graph.entities,
     assertions: graph.assertions,
     themes: graph.themes,
     stateDeltas: graph.stateDeltas,
+    lifecycleActions: graph.lifecycleActions,
     generation: {
       diaryComplete: diary.generation.complete,
       graphComplete: graph.generation.complete,
@@ -90,33 +100,41 @@ export async function generateTemporalMemoryDiary(input: ExtractTemporalMemoryIn
   requireDedicatedMemoryModel(input.settings, input.modelOverride);
   const prompt = buildMemoryDiaryPrompt(input);
   let lastError: unknown;
+  let lastResponse: TextGenerationResult | undefined;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const attemptPrompt = attempt === 0
       ? prompt
       : `${prompt}\n\n上一次没有返回可解析的日记 JSON。请重新输出一个完整 JSON 对象。`;
     const response = await requestTextGenerationDetailed(input.settings, attemptPrompt, input.modelOverride, {
       temperature: attempt === 0 ? 0.1 : 0.05,
-      maxTokens: attempt === 0 ? 4_096 : 8_192,
+      maxTokens: attempt === 0 ? 2_560 : 4_096,
       jsonMode: true,
       signal: input.signal,
       retryTransientFailures: input.retryTransientFailures,
     });
+    lastResponse = response;
     try {
       const parseMetadata = { repairedJson: false };
-      const parsed = parseTemporalMemoryExtractionResponse(requireCompleteGenerationJson(response, '日记'), parseMetadata);
-      return pickTemporalMemoryDiary(parsed, generationMetadata(response, parseMetadata.repairedJson));
+      const parsed = parseTemporalMemoryExtractionResponse(response.text, parseMetadata);
+      return pickTemporalMemoryDiary(parsed, generationMetadata(response, parseMetadata.repairedJson, !response.incomplete));
     } catch (error) {
       if (isNonRetryableTextApiError(error)) throw error;
       lastError = error;
     }
   }
-  const reason = lastError instanceof Error ? lastError.message : 'JSON 结构无效。';
-  throw new Error(`${reason} 日记模型已自动重试仍未成功，请更换总结、图谱模型后再试。`);
+  if (lastResponse) {
+    const parseMetadata = { repairedJson: false };
+    const parsed = parseTemporalMemoryExtractionResponse(lastResponse.text, parseMetadata);
+    return pickTemporalMemoryDiary(parsed, generationMetadata(lastResponse, parseMetadata.repairedJson, false));
+  }
+  const reason = lastError instanceof Error ? lastError.message : '日记模型没有返回内容。';
+  throw new Error(reason);
 }
 
 export async function extractTemporalMemoryGraph(input: ExtractTemporalMemoryInput): Promise<TemporalMemoryGraphResult> {
   const prompt = buildMemoryGraphPrompt(input);
   let lastError: unknown;
+  let lastResponse: TextGenerationResult | undefined;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const attemptPrompt = attempt === 0
       ? prompt
@@ -129,24 +147,40 @@ export async function extractTemporalMemoryGraph(input: ExtractTemporalMemoryInp
         signal: input.signal,
         retryTransientFailures: input.retryTransientFailures,
       });
+      lastResponse = response;
       const parseMetadata = { repairedJson: false };
       return {
-        ...parseTemporalMemoryGraphResponse(requireCompleteGenerationJson(response, '知识图谱'), parseMetadata),
-        generation: generationMetadata(response, parseMetadata.repairedJson)
+        ...parseTemporalMemoryGraphResponse(response.text, parseMetadata),
+        generation: generationMetadata(response, parseMetadata.repairedJson, !response.incomplete)
       };
     } catch (error) {
       if (isNonRetryableTextApiError(error)) throw error;
       lastError = error;
     }
   }
-  throw lastError instanceof Error ? lastError : new Error('知识图谱提取失败。');
+  if (lastResponse) {
+    const parseMetadata = { repairedJson: false };
+    return {
+      ...parseTemporalMemoryGraphResponse(lastResponse.text, parseMetadata),
+      generation: generationMetadata(lastResponse, parseMetadata.repairedJson, false)
+    };
+  }
+  return {
+    entities: [],
+    assertions: [],
+    themes: [],
+    stateDeltas: [],
+    lifecycleActions: [],
+    generation: {
+      complete: false,
+      finishReason: lastError instanceof Error ? lastError.message : '图谱模型没有返回内容。',
+      repairedJson: false
+    }
+  };
 }
 
 export function parseTemporalMemoryGraphResponse(raw: string, metadata: { repairedJson: boolean } = { repairedJson: false }): Omit<TemporalMemoryGraphResult, 'generation'> {
-  const parsed = parseJsonObject(requireCompleteJsonObject(raw, '知识图谱'), metadata);
-  const graphFieldNames = ['entities', 'entityList', 'entity', 'assertions', 'memories', 'memoryItems', 'themes', 'theme', 'stateDeltas', 'stateDelta', 'states'];
-  if (!graphFieldNames.some((field) => field in parsed)) throw new Error('知识图谱模型没有返回图谱字段。');
-  return normalizeMemoryGraphResult(parsed);
+  return normalizeMemoryGraphResult(tryParseJsonObject(raw, metadata) ?? {});
 }
 
 export interface ConsolidateMemoryThemeInput {
@@ -212,16 +246,18 @@ function buildMemoryDiaryPrompt(input: ExtractTemporalMemoryInput): string {
       content: renderMessageContent(message),
     }))
     .join('\n');
-  return `请以${input.characterName}的第一人称写一篇私人日记，只输出一个小型 JSON 对象，不要提取知识图谱。
+  return `请以${input.characterName}的第一人称写一篇简短私人日记，并附少量可核验的事件细节，只输出一个 JSON 对象，不要提取知识图谱。
 
 用户真名是“${input.userName}”，不要用网名代指用户。
 
 写作要求：
 1. 只写下方对话里实际发生、${input.characterName}亲历或得知的内容，不补写未发生的事件。
-2. 保留事件顺序、${input.characterName}真正会注意的细节、感受、关系变化和未完成的牵挂；事件简单时一两句也可以，不要为了凑长度扩写。
-3. 使用${input.characterName}自然的第一人称口吻。title 和 narrative 必填，其余字段不适用时可留空或使用中性数值。
-4. location 只是兼容显示字段；locations 必须有消息证据。线上定位只属于发送者，不能据此认定双方共处；线下只有消息明确描述共同场景时才能使用 shared-scene。没有地点证据就输出空数组和空 location。
-5. narrative 必须自然收束并完整结束，禁止为了接近输出上限而扩写。
+2. narrative 只写 80–220 个中文字符，最多 1–3 个短段；不要为了“详细”扩写氛围、心理或背景。
+3. eventBeats 只保留最多 8 个最重要的时间、地点、行动、事实、变化、承诺或未解问题；细节写入 beat，不要在 narrative 里重复。
+4. 每个 beat 的每类数组最多 4 项，每项简短；没有证据就留空，不要编造。
+5. 使用${input.characterName}自然的第一人称口吻。title 和 narrative 必填，事件简单时一两句也可以。
+5. location 只是兼容显示字段；locations 以及 beat 内 location 都必须有消息证据。线上定位只属于发送者，不能据此认定双方共处；线下只有消息明确描述共同场景时才能使用 shared-scene。
+7. coverage 只记录消息覆盖情况；narrative 必须自然收束并完整结束，不要为了覆盖字段重复全文。
 
 时间规则：
 ${buildMemoryTemporalRules(input)}
@@ -229,13 +265,27 @@ ${buildMemoryTemporalRules(input)}
 JSON 结构：
 {
   "title":"简短经历标题",
-  "narrative":"完整的第一人称日记正文",
+  "narrative":"80–220字的第一人称日记正文，不重复 eventBeats",
   "location":"有证据的主要地点或空字符串",
   "locations":[{"actor":"character|user|shared-scene|unknown","source":"attachment|explicit-text|offline-scene|inferred","label":"地点名","address":"可选地址","distance":"可选距离","evidenceMessageIds":["消息id"],"confidence":0到1}],
   "emotion":"主要情绪或空字符串",
   "valence":-1到1,
   "arousal":0到1,
-  "salience":0到1
+  "salience":0到1,
+  "storyTime":{"kind":"exact|relative|sequence|unknown","text":"如第二天清晨、三天前","occurredAt":可选毫秒时间戳,"relativeOffsetMs":可选相对本轮消息时间的毫秒偏移,"sequence":可选剧情顺序整数,"confidence":0到1},
+  "eventBeats":[{
+    "order":1,
+    "sourceMessageIds":["消息id"],
+    "timeText":"可选的原始时间表达",
+    "location":{"actor":"character|user|shared-scene|unknown","source":"attachment|explicit-text|offline-scene|inferred","label":"地点名","evidenceMessageIds":["消息id"],"confidence":0到1},
+    "participants":["参与者"],
+    "actions":["谁做了什么"],
+    "dialogueFacts":["谁明确说了什么事实"],
+    "changes":["关系、地点、情绪、物品或计划的前后变化"],
+    "commitments":["承诺、计划、完成或取消"],
+    "unresolvedQuestions":["仍未解决的问题"]
+  }],
+  "coverage":{"coveredMessageIds":["消息id"],"omittedMessageIds":["消息id"],"omissionReasons":["与记忆无关的原因"]}
 }
 
 角色设定与写作基准：
@@ -247,7 +297,7 @@ ${input.worldBookContext?.trim() || '无启用且匹配的世界书条目。'}
 本轮对话：
 ${messageRows || '无'}
 
-现在只输出日记 JSON。`;
+现在只输出精简日记 JSON，不要输出 Markdown、HTML 标签或额外解释。`;
 }
 
 function buildMemoryGraphPrompt(input: ExtractTemporalMemoryInput): string {
@@ -289,9 +339,10 @@ function buildMemoryGraphPrompt(input: ExtractTemporalMemoryInput): string {
 8. adaptive-personality 只描述${input.characterName}在反复经历后形成的缓慢适应，不能修改核心人设。relationship/user-impression 也只输出小幅 delta；一次普通对话不得人格突变。
 9. 角色设定与世界书只用于身份关系和角色已知背景，不能替代消息证据。
 10. 只输出图谱字段，不要输出 title、narrative、location、emotion、valence、arousal 或 salience。
-11. entities 最多 8 条、assertions 最多 10 条、themes 最多 5 条、stateDeltas 最多 3 条；没有内容时输出空数组，不得省略字段。
-12. ${timeAwarenessEnabled ? '只有消息明确给出时间或可依据本轮本地时间可靠换算时，才填写 validFrom、validTo、dueAt。' : '时间感知已关闭：不得把“今天、昨天、明天、刚才”等相对表达擅自换算成绝对时间；除非消息直接给出绝对日期，否则省略 validFrom、validTo、dueAt。'}
-13. current-context 与 mood 只描述本轮短暂状态，禁止把旧地点或旧情绪写成永久当前状态。
+11. 对已有 promise 或 open-loop，若本轮明确完成则写 lifecycleActions 的 resolve，明确取消则写 cancel。只能引用“当前已有认知”中给出的 id，且必须提供本轮证据消息 id。
+12. entities 最多 8 条、assertions 最多 10 条、themes 最多 5 条、stateDeltas 最多 3 条、lifecycleActions 最多 6 条；没有内容时输出空数组，不得省略字段。
+13. ${timeAwarenessEnabled ? '只有消息明确给出时间或可依据本轮本地时间可靠换算时，才填写 validFrom、validTo、dueAt。' : '时间感知已关闭：不得把“今天、昨天、明天、刚才”等相对表达擅自换算成绝对时间；除非消息直接给出绝对日期，否则省略 validFrom、validTo、dueAt。'}
+14. current-context 与 mood 只描述本轮短暂状态，禁止把旧地点或旧情绪写成永久当前状态。
 
 JSON 结构：
 {
@@ -322,6 +373,12 @@ JSON 结构：
     "summary":"我的第一人称状态概括",
     "confidence":0到1,
     "facets":[{"key":"稳定英文或中文键","label":"显示名","delta":-1到1}]
+  }],
+  "lifecycleActions":[{
+    "type":"resolve|cancel",
+    "targetAssertionId":"当前已有认知中的 promise 或 open-loop id",
+    "evidenceMessageIds":["本轮消息id"],
+    "reason":"完成或取消的直接证据"
   }]
 }
 
@@ -361,32 +418,22 @@ function renderMessageContent(message: ChatMessage): string {
 }
 
 function parseJsonObject(raw: string, metadata: { repairedJson: boolean } = { repairedJson: false }): Record<string, unknown> {
-  const text = String(raw ?? '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  const candidate = start >= 0 ? text.slice(start, end > start ? end + 1 : undefined) : text;
-  for (const source of [candidate, text]) {
-    if (!source) continue;
-    try {
-      const value = JSON.parse(source) as unknown;
-      if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
-    } catch {}
-    try {
-      const value = JSON.parse(jsonrepair(source)) as unknown;
-      if (value && typeof value === 'object' && !Array.isArray(value)) {
-        metadata.repairedJson = true;
-        return value as Record<string, unknown>;
-      }
-    } catch {}
-  }
+  const parsed = parseLooseMemoryJson(raw, metadata);
+  if (parsed) return parsed;
   throw new Error('记忆抽取结果不是有效 JSON 对象。');
 }
 
+function tryParseJsonObject(raw: string, metadata: { repairedJson: boolean } = { repairedJson: false }): Record<string, unknown> | null {
+  return parseLooseMemoryJson(raw, metadata);
+}
+
 export function parseTemporalMemoryExtractionResponse(raw: string, metadata: { repairedJson: boolean } = { repairedJson: false }): MemoryExtractionResult {
-  const parsed = parseJsonObject(requireCompleteJsonObject(raw, '日记'), metadata);
-  const originalNarrative = normalizeNarrativeText(parsed.narrative ?? parsed.memory ?? parsed.summary ?? parsed.content);
-  if (!originalNarrative) throw new Error('记忆模型没有返回日记正文。');
-  return normalizeExtractionResult(parsed);
+  const parsed = tryParseJsonObject(raw, metadata);
+  if (parsed) {
+    const originalNarrative = normalizeNarrativeText(parsed.narrative ?? parsed.memory ?? parsed.summary ?? parsed.content);
+    return normalizeExtractionResult({ ...parsed, narrative: originalNarrative || fallbackMemoryNarrative(raw) });
+  }
+  return normalizeExtractionResult({ narrative: fallbackMemoryNarrative(raw) });
 }
 
 function pickTemporalMemoryDiary(result: MemoryExtractionResult, generation: MemoryStageGenerationMetadata): TemporalMemoryDiaryResult {
@@ -399,13 +446,16 @@ function pickTemporalMemoryDiary(result: MemoryExtractionResult, generation: Mem
     valence: result.valence,
     arousal: result.arousal,
     salience: result.salience,
+    storyTime: result.storyTime,
+    eventBeats: result.eventBeats,
+    coverage: result.coverage,
     generation,
   };
 }
 
 function normalizeExtractionResult(raw: Record<string, unknown>): MemoryExtractionResult {
   const graph = normalizeMemoryGraphResult(raw);
-  const narrative = normalizeNarrativeText(raw.narrative ?? raw.memory ?? raw.summary ?? raw.content)
+  const narrative = limitNarrativeText(normalizeNarrativeText(raw.narrative ?? raw.memory ?? raw.summary ?? raw.content), 720)
     || '我记得我们最近有过一段值得留下的交流。';
   const title = cleanText(raw.title ?? raw.memoryTitle, 80)
     || cleanText(narrative, 28)
@@ -419,6 +469,9 @@ function normalizeExtractionResult(raw: Record<string, unknown>): MemoryExtracti
     valence: boundedNumber(raw.valence, -1, 1, 0),
     arousal: boundedNumber(raw.arousal, 0, 1, 0.25),
     salience: boundedNumber(raw.salience, 0, 1, 0.45),
+    storyTime: normalizeStoryTime(raw.storyTime ?? raw.story_time),
+    eventBeats: flexibleRecordArray(raw.eventBeats ?? raw.events ?? raw.beats, ['sourceMessageIds', 'actions', 'order'], 'order').slice(0, 24).flatMap(normalizeEventBeat),
+    coverage: normalizeDiaryCoverage(raw.coverage),
     ...graph,
   };
 }
@@ -435,7 +488,77 @@ function normalizeMemoryGraphResult(raw: Record<string, unknown>): Omit<Temporal
     assertions,
     themes: unique(flexibleStringArray(raw.themes ?? raw.theme).map((item) => cleanText(item, 60)).filter(Boolean)).slice(0, 12),
     stateDeltas,
+    lifecycleActions: flexibleRecordArray(raw.lifecycleActions ?? raw.lifecycle ?? raw.actions, ['type', 'targetAssertionId'], 'targetAssertionId').slice(0, 12).flatMap(normalizeLifecycleAction),
   };
+}
+
+function normalizeStoryTime(value: unknown): MemoryStoryTime | undefined {
+  const raw = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  if (!raw) return undefined;
+  const kind = cleanText(raw.kind, 20) as MemoryStoryTime['kind'];
+  if (!storyTimeKinds.has(kind)) return undefined;
+  const relativeOffsetMs = Number(raw.relativeOffsetMs ?? raw.offsetMs);
+  const relativeOffsetDays = Number(raw.relativeOffsetDays);
+  const offset = Number.isFinite(relativeOffsetMs)
+    ? relativeOffsetMs
+    : Number.isFinite(relativeOffsetDays)
+      ? relativeOffsetDays * 86_400_000
+      : undefined;
+  const sequence = Number(raw.sequence);
+  const occurredAt = positiveTime(raw.occurredAt ?? raw.storyOccurredAt);
+  const text = cleanText(raw.text ?? raw.relativeText ?? raw.label, 120) || undefined;
+  if (kind !== 'unknown' && !text && !occurredAt && !Number.isFinite(offset) && !Number.isFinite(sequence)) return undefined;
+  return {
+    kind,
+    text,
+    occurredAt,
+    relativeOffsetMs: Number.isFinite(offset) ? Math.max(-3_650 * 86_400_000, Math.min(3_650 * 86_400_000, offset as number)) : undefined,
+    sequence: Number.isFinite(sequence) ? Math.round(sequence) : undefined,
+    confidence: clamp(raw.confidence, 0, 1),
+  };
+}
+
+function normalizeEventBeat(raw: Record<string, unknown>): MemoryEventBeat[] {
+  const sourceMessageIds = unique(stringArray(raw.sourceMessageIds).map((item) => cleanText(item, 120)).filter(Boolean)).slice(0, 20);
+  if (!sourceMessageIds.length) return [];
+  const location = raw.location && typeof raw.location === 'object' && !Array.isArray(raw.location)
+    ? normalizeLocationDraft(raw.location as Record<string, unknown>)[0]
+    : undefined;
+  return [{
+    order: Math.max(1, Math.round(Number(raw.order) || 1)),
+    sourceMessageIds,
+    timeText: cleanText(raw.timeText ?? raw.time, 120) || undefined,
+    location,
+    participants: unique(flexibleStringArray(raw.participants).map((item) => cleanText(item, 80)).filter(Boolean)).slice(0, 12),
+    actions: unique(flexibleStringArray(raw.actions).map((item) => cleanText(item, 240)).filter(Boolean)).slice(0, 16),
+    dialogueFacts: unique(flexibleStringArray(raw.dialogueFacts ?? raw.facts).map((item) => cleanText(item, 240)).filter(Boolean)).slice(0, 16),
+    changes: unique(flexibleStringArray(raw.changes).map((item) => cleanText(item, 240)).filter(Boolean)).slice(0, 12),
+    commitments: unique(flexibleStringArray(raw.commitments ?? raw.promises).map((item) => cleanText(item, 240)).filter(Boolean)).slice(0, 12),
+    unresolvedQuestions: unique(flexibleStringArray(raw.unresolvedQuestions ?? raw.openQuestions).map((item) => cleanText(item, 180)).filter(Boolean)).slice(0, 12),
+  }];
+}
+
+function normalizeDiaryCoverage(value: unknown): MemoryDiaryCoverage | undefined {
+  const raw = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  if (!raw) return undefined;
+  return {
+    coveredMessageIds: unique(stringArray(raw.coveredMessageIds).map((item) => cleanText(item, 120)).filter(Boolean)).slice(0, 120),
+    omittedMessageIds: unique(stringArray(raw.omittedMessageIds).map((item) => cleanText(item, 120)).filter(Boolean)).slice(0, 120),
+    omissionReasons: flexibleStringArray(raw.omissionReasons).map((item) => cleanText(item, 180)).filter(Boolean).slice(0, 120),
+  };
+}
+
+function normalizeLifecycleAction(raw: Record<string, unknown>): MemoryLifecycleActionDraft[] {
+  const type = cleanText(raw.type, 20);
+  const targetAssertionId = cleanText(raw.targetAssertionId ?? raw.assertionId, 160);
+  const evidenceMessageIds = unique(stringArray(raw.evidenceMessageIds).map((item) => cleanText(item, 120)).filter(Boolean)).slice(0, 20);
+  if ((type !== 'resolve' && type !== 'cancel') || !targetAssertionId || !evidenceMessageIds.length) return [];
+  return [{
+    type,
+    targetAssertionId,
+    evidenceMessageIds,
+    reason: cleanText(raw.reason, 240),
+  }];
 }
 
 
@@ -621,9 +744,9 @@ function requireCompleteGenerationJson(result: TextGenerationResult, label: stri
   return requireCompleteJsonObject(result.text, label);
 }
 
-function generationMetadata(result: TextGenerationResult, repairedJson: boolean): MemoryStageGenerationMetadata {
+function generationMetadata(result: TextGenerationResult, repairedJson: boolean, complete = true): MemoryStageGenerationMetadata {
   return {
-    complete: true,
+    complete,
     finishReason: result.finishReason || result.status || undefined,
     outputTokens: result.usage?.outputTokens,
     repairedJson

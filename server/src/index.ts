@@ -17,7 +17,7 @@ const app = Fastify({
   disableRequestLogging: true,
   logger: {
     level: config.production ? 'info' : 'debug',
-    redact: ['req.headers.authorization', 'req.headers.cookie', 'req.headers.x-link-challenge-token', 'res.headers.set-cookie']
+    redact: ['req.headers.authorization', 'req.headers.cookie', 'req.headers.x-link-challenge-token', 'req.headers.x-link-session', 'res.headers.set-cookie']
   },
   trustProxy: config.trustProxy,
   bodyLimit: Math.max(config.proxyBodyLimitBytes, config.uploadBodyLimitBytes)
@@ -49,6 +49,30 @@ const appShellCacheControl = 'private, max-age=300, stale-while-revalidate=86400
 const databaseStartupRetryLimit = 12;
 const databaseStartupRetryDelayMs = 1_000;
 
+function requestOrigin(request: { headers: Record<string, string | string[] | undefined> }) {
+  const origin = request.headers.origin;
+  return Array.isArray(origin) ? String(origin[0] ?? '').trim() : String(origin ?? '').trim();
+}
+
+function isNativeApiRequest(request: { headers: Record<string, string | string[] | undefined> }) {
+  return config.nativeApiOrigins.includes(requestOrigin(request));
+}
+
+function applyNativeApiCors(request: { headers: Record<string, string | string[] | undefined> }, reply: { header(name: string, value: string): unknown }) {
+  const origin = requestOrigin(request);
+  reply.header('Access-Control-Allow-Origin', origin);
+  reply.header('Access-Control-Allow-Credentials', 'false');
+  reply.header('Access-Control-Allow-Headers', 'Accept, Authorization, Content-Type, X-Link-Challenge-Token, X-Link-Native-Client, X-Link-Session');
+  reply.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  reply.header('Vary', 'Origin');
+}
+
+function isPublicStaticAssetPath(pathname: string) {
+  if (pathname === '/index.html') return false;
+  if (pathname.startsWith('/assets/')) return true;
+  return /^\/[^/]+\.(?:avif|bmp|css|gif|ico|jpe?g|js|json|map|m4a|mp3|ogg|otf|png|svg|ttf|txt|wav|webmanifest|webp|woff2?)$/i.test(pathname);
+}
+
 function isTransientDatabaseStartupError(error: unknown) {
   const record = error && typeof error === 'object' ? error as { code?: unknown; message?: unknown } : null;
   const code = String(record?.code ?? '');
@@ -72,6 +96,10 @@ async function migrateDatabaseOnStartup() {
 
 app.addHook('onRequest', async (request, reply) => {
   const pathname = request.url.split('?')[0] || '/';
+  if (isNativeApiRequest(request)) {
+    applyNativeApiCors(request, reply);
+    if (request.method === 'OPTIONS') return await reply.code(204).send();
+  }
   if (pathname.startsWith('/api/admin/')) {
     if (!config.adminToken || request.headers.authorization !== `Bearer ${config.adminToken}`) {
       return await reply.code(401).send({ error: 'admin_auth_required' });
@@ -79,6 +107,7 @@ app.addHook('onRequest', async (request, reply) => {
     return;
   }
   if (publicExactPaths.has(pathname)
+    || isPublicStaticAssetPath(pathname)
     || /^\/workbox-[^/]+\.js$/.test(pathname)
     || (config.cdnPublicReleaseRedirects && /^\/__release-download\/[^/]+\/[^/]+$/.test(pathname))
     || pathname.startsWith('/api/auth/challenges/')

@@ -1,4 +1,5 @@
 import type { ThemeFontEntry } from '@/types/domain';
+import { appApiFetch } from './appApi';
 import { hydrateStoredMediaRefs, isStoredLinkMediaUrl, resolveLocalMediaBlob, storeLocalMediaBlob } from '@/utils/mediaStorage';
 
 const fontAssetPlaceholderPrefix = '__LINK_THEME_FONT_ASSET_';
@@ -33,7 +34,7 @@ async function fetchResource(url: string, accept: string) {
   let lastError: unknown = null;
   for (const endpoint of endpoints) {
     try {
-      const response = await fetch(endpoint, { headers: { Accept: accept } });
+      const response = await appApiFetch(endpoint, { headers: { Accept: accept } });
       if (response.ok) return response;
       lastError = new Error(`下载失败（HTTP ${response.status}）。`);
     } catch (error) {
