@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "webBuildId": "local-0.1.0-2026-08-06T08:59:19.399Z",
+  "apiSchemaVersion": 1,
+  "minDbVersion": 21,
+  "minNativeBuild": {
+    "android": 0,
+    "ios": 0
+  },
+  "generatedAt": "2026-08-06T08:59:23.953Z"
+}
