@@ -18,6 +18,7 @@ import { extractThoughtChainContent } from '@/utils/thoughtChainThemes';
 import { isLocalMediaCacheUrl, resolveLocalMediaBlob } from '@/utils/mediaStorage';
 import { classifyTextApiHttpError, TextApiRequestError, type TextApiErrorClassification } from '@/utils/textApiErrors';
 import { executeMcpTools, resolveMcpTools, type ResolvedMcpTool } from './mcp';
+import { appApiFetch, appApiUrl, isNativeAppRuntime } from './appApi';
 import { buildMomentPrompt, buildPrompt } from './prompt';
 import { prependTabooWorldBookPrompt } from './tabooWorldBook';
 
@@ -332,7 +333,7 @@ function normalizeBaseUrl(url: string) {
 function createImageDownloadUrl(url: string) {
   const trimmed = url.trim();
   if (/^https?:\/\//i.test(trimmed)) {
-    return `${imageDownloadProxyPath}?url=${encodeURIComponent(trimmed)}`;
+    return appApiUrl(`${imageDownloadProxyPath}?url=${encodeURIComponent(trimmed)}`);
   }
   return trimmed;
 }
@@ -405,14 +406,14 @@ async function fetchGeneratedImageUrlAsDataUrl(imageUrl: string, fallbackMimeTyp
     { label: '同源下载代理', endpoint: proxyEndpoint, headers: createImageDownloadHeaders(), enabled: true },
     { label: '浏览器直连（带鉴权）', endpoint: imageUrl, headers: createImageDownloadHeaders(apiKey), enabled: Boolean(apiKey) && proxyEndpoint !== imageUrl },
     { label: '浏览器直连', endpoint: imageUrl, headers: createImageDownloadHeaders(), enabled: proxyEndpoint !== imageUrl }
-  ];
+  ].filter((attempt) => !isNativeAppRuntime() || attempt.endpoint === proxyEndpoint);
 
   let lastError: unknown = null;
   for (const attempt of attempts) {
     if (!attempt.enabled) continue;
     for (let retryIndex = 0; retryIndex <= openAiImageRetryDelays.length; retryIndex += 1) {
       try {
-        const response = await fetch(attempt.endpoint, { headers: attempt.headers });
+        const response = await appApiFetch(attempt.endpoint, { headers: attempt.headers });
         if (!response.ok && transientOpenAiImageStatuses.has(response.status) && retryIndex < openAiImageRetryDelays.length) {
           const retryAfter = parseRetryAfter(response.headers.get('retry-after'));
           await wait(retryAfter || openAiImageRetryDelays[retryIndex]);
@@ -681,6 +682,7 @@ function isLikelyViteProxyPort(port: string) {
 
 function canUseLocalTextProxy() {
   if (import.meta.env.DEV) return true;
+  if (isNativeAppRuntime()) return true;
   if (typeof window === 'undefined') return false;
   if (!['http:', 'https:'].includes(window.location.protocol)) return false;
   return isLocalProxyHostname(window.location.hostname) || isLikelyViteProxyPort(window.location.port);
@@ -769,7 +771,7 @@ async function fetchTextEndpointWithFallback(
   for (const requestEndpoint of requestEndpoints) {
     lastRequestEndpoint = requestEndpoint;
     try {
-      const response = await fetch(requestEndpoint, init);
+      const response = await appApiFetch(requestEndpoint, init);
       return { response, requestEndpoint };
     } catch (error) {
       if (init.signal?.aborted) throw init.signal.reason instanceof Error ? init.signal.reason : error;
@@ -840,7 +842,7 @@ async function fetchOpenAiImageWithRetry(endpoint: string, init: RequestInit) {
   for (let attempt = 0; attempt <= openAiImageRetryDelays.length; attempt += 1) {
     let response: Response;
     try {
-      response = await fetch(endpoint, init);
+      response = await appApiFetch(endpoint, init);
     } catch (error) {
       lastNetworkError = error;
       if (attempt >= openAiImageRetryDelays.length) break;

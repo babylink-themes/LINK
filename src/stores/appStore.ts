@@ -11852,6 +11852,7 @@ export const useAppStore = defineStore('app', () => {
     generatedImagesForProvider,
     settingsForConversation,
     modelOverridesForConversation,
+    ensureMemoryGraphLoaded,
     memoryGraphForConversation,
     memoryTimelineForConversation,
     memoryThemesForConversation,

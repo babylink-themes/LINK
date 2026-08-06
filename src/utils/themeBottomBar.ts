@@ -1,6 +1,6 @@
 export const defaultGlobalBottomBarOffset = 0;
-export const minGlobalBottomBarOffset = -24;
-export const maxGlobalBottomBarOffset = 24;
+export const minGlobalBottomBarOffset = -120;
+export const maxGlobalBottomBarOffset = 120;
 export const globalBottomBarOffsetStep = 2;
 
 export function normalizeGlobalBottomBarOffset(value: unknown) {

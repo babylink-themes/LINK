@@ -60,6 +60,39 @@ export function normalizeLifeLedgerEvent(input: unknown, fallbackAt = Date.now()
   return next;
 }
 
+export function createCurrentLifeLedgerEvent(snapshot: CoupleSpaceSnapshot, occurredAt = Date.now()): LifeLedgerEvent {
+  const place = text(snapshot.location.place, '角色的小世界');
+  const status = text(snapshot.location.status, '正在继续自己的生活');
+  const activeApp = text(snapshot.device.activeApp);
+  const deviceDetail = [
+    `手机电量 ${snapshot.device.battery}%${snapshot.device.charging ? '，正在充电' : ''}`,
+    activeApp && activeApp !== '没有正在使用的应用' ? `当前使用 ${activeApp}` : '',
+    snapshot.device.network && snapshot.device.network !== '未分享网络' ? `连接 ${snapshot.device.network}` : ''
+  ].filter(Boolean).join('，');
+  const detail = [
+    `角色此刻在${place}，${status}。`,
+    deviceDetail ? `${deviceDetail}。` : '',
+    snapshot.bond.mood ? `此时的心情是${snapshot.bond.mood}。` : '',
+    snapshot.bond.nextPlan ? `接下来打算${snapshot.bond.nextPlan}。` : ''
+  ].filter(Boolean).join('');
+  return normalizeLifeLedgerEvent({
+    id: createId('life-current'),
+    occurredAt,
+    kind: activeApp && activeApp !== '没有正在使用的应用' ? 'app' : 'location',
+    source: 'life-advance',
+    surface: 'guardian',
+    importance: 'notice',
+    title: `此刻在${place}`,
+    summary: `${status}，这是刚刚同步的当前生活状态。`,
+    detail,
+    icon: activeApp && activeApp !== '没有正在使用的应用' ? '▣' : '⌖',
+    battery: snapshot.device.battery,
+    charging: snapshot.device.charging,
+    ...(activeApp && activeApp !== '没有正在使用的应用' ? { app: activeApp } : {}),
+    location: place
+  }, occurredAt);
+}
+
 export function mergeLifeLedgerEvents(existing: LifeLedgerEvent[], incoming: LifeLedgerEvent[], now = Date.now()) {
   const byKey = new Map<string, LifeLedgerEvent>();
   for (const event of recentLifeLedgerEvents(existing, now)) byKey.set(eventKey(event), event);

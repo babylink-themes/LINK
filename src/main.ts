@@ -102,8 +102,13 @@ async function bootstrap() {
 	activeStore = store;
 	restoreStartupCache(store);
 	await restoreStartupSettingsFromDb(store);
-	if (!accessGranted && Capacitor.isNativePlatform()) {
-		await router.replace('/access');
+	await router.isReady();
+	if (Capacitor.isNativePlatform()) {
+		if (!accessGranted) {
+			await router.replace('/access');
+		} else if (router.currentRoute.value.name === 'native-access') {
+			await router.replace({ name: 'home' });
+		}
 	}
 	try {
 		app.mount('#app');

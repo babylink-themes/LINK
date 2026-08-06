@@ -1,5 +1,5 @@
 <template>
-  <section class="memory-studio" :class="`surface-${surface}`">
+  <section class="memory-studio" :class="`surface-${surface}`" :aria-busy="graphLoading">
     <header class="studio-header">
       <div class="profile-row">
         <div class="avatar-frame">
@@ -23,6 +23,8 @@
         </button>
       </div>
     </header>
+
+    <p v-if="graphLoading" class="memory-loading-note">正在打开角色记忆…</p>
 
     <section class="compression-note" aria-label="上下文压缩效果">
       <div class="compression-copy">
@@ -151,7 +153,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { Archive, BookOpen, Bookmark, EyeOff, Heart, HeartHandshake, Layers3, LoaderCircle, MapPin, Pencil, Plus, RefreshCw, Search, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-vue-next';
 import { useAppStore } from '@/stores/appStore';
 import type { ChatMemorySettings } from '@/types/domain';
@@ -189,6 +191,7 @@ const correctionDraft = ref('');
 const confirmingForgetId = ref('');
 const actionMessage = ref('');
 const actionTone = ref<'success' | 'warning'>('success');
+const graphLoading = ref(true);
 const memoryDraft = reactive<ChatMemorySettings>({ ...store.settingsForConversation(props.conversationId).memory });
 
 const conversation = computed(() => store.conversationById(props.conversationId));
@@ -262,6 +265,21 @@ watch(() => props.conversationId, () => {
   editingAssertionId.value = '';
   confirmingForgetId.value = '';
   Object.assign(memoryDraft, store.settingsForConversation(props.conversationId).memory);
+  graphLoading.value = true;
+  void loadMemoryGraph();
+});
+
+async function loadMemoryGraph() {
+  graphLoading.value = true;
+  try {
+    await store.ensureMemoryGraphLoaded();
+  } finally {
+    graphLoading.value = false;
+  }
+}
+
+onMounted(() => {
+  void loadMemoryGraph();
 });
 
 async function saveMemorySettings() {
@@ -282,6 +300,7 @@ async function captureNow() {
 async function performCaptureNow() {
   capturing.value = true;
   try {
+    await loadMemoryGraph();
     const episode = await store.captureConversationMemory(props.conversationId, { force: true });
     setMessage(episode ? `已把「${memoryText(episode.title)}」写进日记。` : '暂时没有尚未编码的完整楼层。', episode ? 'success' : 'warning');
   } finally {
@@ -414,6 +433,7 @@ function kindLabel(kind: MemoryAssertion['kind']) { return ({ fact: '事实', pr
 .memory-studio * {
   font-family: var(--app-current-font-family) !important;
 }
+.memory-loading-note{margin:0;padding:10px 12px;border:1px solid rgba(68,55,60,.08);border-radius:12px;background:#fff;color:#9a858d;font-size:11px;text-align:center}
 .diary-card .diary-card-head{align-items:flex-start}.diary-card-meta{display:flex;min-width:0;align-items:center;gap:7px}.diary-card-meta span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.diary-card-actions{display:flex;flex:0 0 auto;gap:4px}.diary-card-actions button{display:grid;width:26px;height:26px;padding:0;place-items:center;border:0;border-radius:50%;background:transparent;color:#9d7883}.diary-card-actions button:disabled{opacity:.45}.diary-editor{display:grid;gap:10px;margin-top:12px}.diary-editor label{display:grid;gap:5px;color:#9b8d92;font-size:9px}.diary-editor input,.diary-editor textarea{width:100%;padding:9px 10px;border:1px solid #eadfe1;border-radius:10px;outline:0;background:#fff;color:var(--ink);font-size:12px;line-height:1.65;resize:vertical}.diary-editor input:focus,.diary-editor textarea:focus{border-color:#d7b8c0;box-shadow:0 0 0 2px rgba(215,184,192,.15)}.diary-editor-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.diary-edit-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;width:100%;margin-top:12px}.diary-edit-actions button{width:100%;padding:9px 10px;border:0;border-radius:10px;background:#f4eff0;color:#8f7e84;font-size:10px}.diary-edit-actions button:disabled{opacity:.45}
 .diary-load-more{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:10px 14px;border:1px solid #eadfe1;border-radius:13px;background:#fffaf9;color:#946f7a;font-size:11px}.diary-load-more span{color:#b4a5aa;font-size:9px}
 .diary-delete-confirm{flex-wrap:wrap;justify-content:flex-start;margin-top:10px;padding:9px 10px;border-radius:11px;background:#fff0ed}.diary-delete-confirm span{min-width:180px;flex:1;color:#9a6d69;line-height:1.5}.diary-delete-confirm button{flex:0 0 auto}

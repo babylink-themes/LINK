@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import type { CoupleSpaceSnapshot, LifeLedgerEvent } from '../src/types/domain.ts';
 import { guardianAttachmentFromEvent, isGuardianVisibleLifeEvent } from '../src/utils/coupleGuardianEvents.ts';
 import { assertCompleteLifeLedgerEventPayload, normalizeLifeLedgerAdvancePayload } from '../src/utils/lifeLedgerGeneratedOutput.ts';
-import { appendLifeLedgerEvents, lifeLedgerForCharacter, normalizeLifeLedger, normalizeLifeLedgerEvent, projectLifeLedgerSnapshot, recentLifeLedgerEvents } from '../src/utils/lifeLedger.ts';
+import { appendLifeLedgerEvents, createCurrentLifeLedgerEvent, lifeLedgerForCharacter, normalizeLifeLedger, normalizeLifeLedgerEvent, projectLifeLedgerSnapshot, recentLifeLedgerEvents } from '../src/utils/lifeLedger.ts';
 import { normalizeCoupleSpaceState } from '../src/utils/coupleSpace.ts';
 
 const now = Date.UTC(2026, 7, 5, 12, 0, 0);
@@ -142,6 +142,13 @@ assert.equal(snapshotOnlyAdvancePayload.events.length, 1, '模型仅返回当前
 assert.equal(snapshotOnlyAdvancePayload.events[0]?.location, '河边咖啡馆');
 assert.match(String(snapshotOnlyAdvancePayload.events[0]?.detail), /河边咖啡馆/);
 assert.doesNotThrow(() => assertCompleteLifeLedgerEventPayload(snapshotOnlyAdvancePayload));
+
+const currentStateEvent = createCurrentLifeLedgerEvent(snapshot, now);
+assert.equal(currentStateEvent.source, 'life-advance');
+assert.equal(currentStateEvent.surface, 'guardian');
+assert.equal(currentStateEvent.location, snapshot.location.place);
+assert.match(currentStateEvent.summary, /刚刚同步/);
+assert.equal(isGuardianVisibleLifeEvent(currentStateEvent), true, '模型只返回重复或隐藏事件时，本地当前状态兜底事件必须可展示');
 
 const aliasEventPayload = normalizeLifeLedgerAdvancePayload({
   snapshot,

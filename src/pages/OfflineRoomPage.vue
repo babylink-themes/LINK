@@ -1074,7 +1074,6 @@ onBeforeUnmount(() => {
   store.setAppUpdateTransientOperation(`offline-regenerate:${props.id}`, '', false);
   store.setAppUpdateTransientOperation(`offline-floor-edit:${props.id}`, '', false);
   store.setAppUpdateTransientOperation(`offline-jump:${props.id}`, '', false);
-  void store.flushConversationMemory(props.id);
 });
 
 watch(() => route.query.focus, (value) => {

@@ -9,7 +9,7 @@ interface LinkSessionPlugin {
 const LinkSession = registerPlugin<LinkSessionPlugin>('LinkSession');
 
 export function isNativeSessionStorageAvailable() {
-  return Capacitor.isNativePlatform() && Capacitor.isPluginAvailable('LinkSession');
+  return Capacitor.isNativePlatform();
 }
 
 export async function getNativeSessionToken() {
