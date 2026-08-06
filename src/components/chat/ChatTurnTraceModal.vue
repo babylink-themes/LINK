@@ -11,6 +11,10 @@
             @click="toggleCard"
             @keydown.enter.prevent="toggleCard"
             @keydown.space.prevent="toggleCard"
+            @touchstart.passive="startCardTouch"
+            @touchmove.passive="trackCardTouch"
+            @touchend.passive="finishCardTouch"
+            @touchcancel="cancelCardTouch"
           >
             <template v-if="hasCustomThoughtChain">
               <section class="trace-custom-card trace-custom-card--front" :aria-hidden="isFlipped" :data-thought-chain-scope="thoughtChainScopeId" v-html="customThoughtChainHtml"></section>
@@ -155,8 +159,12 @@ const isFlipped = ref(false);
 const activeToolIndex = ref<number | null>(null);
 let lastFlipAt = 0;
 let customThoughtChainStyleElement: HTMLStyleElement | null = null;
+let cardTouchStartX = 0;
+let cardTouchStartY = 0;
+let shouldIgnoreCardClick = false;
+let cardClickResetTimer: number | null = null;
 
-const toolCalls = computed(() => props.trace?.mcpToolCalls ?? []);
+const toolCalls = computed(() => (props.trace?.mcpToolCalls ?? []).filter((call) => !call.hidden));
 const traceMindText = computed(() => props.trace?.visibleReasoning || props.trace?.reasoning || '');
 const thoughtChainTheme = computed(() => props.trace?.thoughtChainTheme ?? null);
 const hasCustomThoughtChain = computed(() => Boolean(thoughtChainTheme.value && (thoughtChainTheme.value.template || thoughtChainTheme.value.css)));
@@ -215,6 +223,7 @@ watch([() => props.modelValue, hasCustomThoughtChain, thoughtChainScopeId, thoug
 onBeforeUnmount(() => {
   customThoughtChainStyleElement?.remove();
   customThoughtChainStyleElement = null;
+  if (cardClickResetTimer !== null) window.clearTimeout(cardClickResetTimer);
 });
 
 function updateThoughtChainStyle() {
@@ -235,10 +244,53 @@ function close() {
 }
 
 function toggleCard() {
+  if (shouldIgnoreCardClick) {
+    shouldIgnoreCardClick = false;
+    if (cardClickResetTimer !== null) {
+      window.clearTimeout(cardClickResetTimer);
+      cardClickResetTimer = null;
+    }
+    return;
+  }
   const now = Date.now();
   if (now - lastFlipAt < 360) return;
   lastFlipAt = now;
   isFlipped.value = !isFlipped.value;
+}
+
+function startCardTouch(event: TouchEvent) {
+  const touch = event.touches[0];
+  if (!touch) return;
+  if (cardClickResetTimer !== null) {
+    window.clearTimeout(cardClickResetTimer);
+    cardClickResetTimer = null;
+  }
+  cardTouchStartX = touch.clientX;
+  cardTouchStartY = touch.clientY;
+  shouldIgnoreCardClick = false;
+}
+
+function trackCardTouch(event: TouchEvent) {
+  const touch = event.touches[0];
+  if (!touch || shouldIgnoreCardClick) return;
+  if (Math.abs(touch.clientY - cardTouchStartY) < 8 || Math.abs(touch.clientY - cardTouchStartY) < Math.abs(touch.clientX - cardTouchStartX)) return;
+  shouldIgnoreCardClick = true;
+}
+
+function finishCardTouch() {
+  if (!shouldIgnoreCardClick) return;
+  cardClickResetTimer = window.setTimeout(() => {
+    shouldIgnoreCardClick = false;
+    cardClickResetTimer = null;
+  }, 450);
+}
+
+function cancelCardTouch() {
+  shouldIgnoreCardClick = false;
+  if (cardClickResetTimer !== null) {
+    window.clearTimeout(cardClickResetTimer);
+    cardClickResetTimer = null;
+  }
 }
 
 function toggleTool(index: number) {
@@ -291,6 +343,8 @@ function formatArguments(value: Record<string, unknown>) {
   height: 100%;
   cursor: pointer;
   outline: none;
+  touch-action: pan-y;
+  -webkit-tap-highlight-color: transparent;
   -webkit-transform: rotateY(0deg);
   transform: rotateY(0deg);
   -webkit-transform-style: preserve-3d;
@@ -313,7 +367,11 @@ function formatArguments(value: Record<string, unknown>) {
 .trace-page {
   position: absolute;
   inset: 0;
-  overflow: hidden auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
   color: #1f2422;
   scrollbar-color: rgba(100, 93, 83, 0.32) transparent;
   scrollbar-width: thin;
@@ -337,7 +395,11 @@ function formatArguments(value: Record<string, unknown>) {
 .trace-custom-card {
   position: absolute;
   inset: 0;
-  overflow: hidden auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
   -webkit-transform: rotateY(0deg) translateZ(1px);
@@ -439,8 +501,20 @@ function formatArguments(value: Record<string, unknown>) {
 .trace-note-body {
   min-height: 0;
   margin: 13px 0 9px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
+.trace-custom-card :deep(.thought-chain-content),
+.trace-custom-card :deep(.thought-chain-tools-list) {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
 }
 
 .trace-note-body pre {
@@ -600,8 +674,11 @@ function formatArguments(value: Record<string, unknown>) {
 .trace-tool-route {
   min-height: 0;
   padding: 17px 0 12px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
 }
 
 .trace-route-stop { position: relative; padding-left: 19px; }

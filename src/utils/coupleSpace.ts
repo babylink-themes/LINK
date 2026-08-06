@@ -1,4 +1,4 @@
-import type { CoupleActivityCategory, CoupleAppUsageRecord, CoupleDeviceScreenStatus, CoupleFootprintRecord, CoupleGalleryRecord, CoupleLifeRecord, CoupleMomentRecord, CoupleNetworkRecord, CoupleNoteRecord, CoupleNotificationRecord, CouplePhoneChatRecord, CoupleRouteStop, CoupleSpaceSnapshot, CoupleSpaceState, CoupleWishNote } from '@/types/domain';
+import type { CoupleActivityCategory, CoupleAppUsageRecord, CoupleDeviceScreenStatus, CoupleFootprintRecord, CoupleGalleryRecord, CoupleLifeEvent, CoupleLifeEventImportance, CoupleLifeEventKind, CoupleLifeRecord, CoupleLifeState, CoupleLifeUpdate, CoupleMomentRecord, CoupleNetworkRecord, CoupleNoteRecord, CoupleNotificationRecord, CouplePhoneChatMessage, CouplePhoneChatRecord, CoupleRouteStop, CoupleSpaceSnapshot, CoupleSpaceState, CoupleWishNote, GuardianEventDetailBlock } from '@/types/domain';
 
 const routeKinds = new Set<CoupleRouteStop['kind']>(['start', 'pass', 'stay', 'arrival']);
 const activityCategories = new Set<CoupleActivityCategory>(['sleep', 'home', 'travel', 'work', 'meal', 'social', 'errand', 'leisure']);
@@ -7,6 +7,8 @@ const screenStatuses = new Set<CoupleDeviceScreenStatus>(['using', 'locked', 'id
 const footprintKinds = new Set<CoupleFootprintRecord['kind']>(['search', 'browser', 'map', 'shopping']);
 const lifeRecordKinds = new Set<CoupleLifeRecord['kind']>(['alarm', 'calendar', 'order', 'music', 'draft']);
 const phoneChatSenders = new Set(['character', 'contact']);
+const lifeEventKinds = new Set<CoupleLifeEventKind>(['charge', 'screen', 'app', 'network', 'location', 'travel', 'notification', 'activity']);
+const lifeEventImportances = new Set<CoupleLifeEventImportance>(['quiet', 'notice', 'highlight']);
 const fallbackGalleryPalettes: Array<[string, string]> = [
   ['#fbd3e1', '#d8cff8'],
   ['#ccece2', '#d7e4f8'],
@@ -16,6 +18,10 @@ const fallbackGalleryPalettes: Array<[string, string]> = [
 
 function text(value: unknown, fallback = '') {
   return String(value ?? '').trim() || fallback;
+}
+
+function rawText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 function limitedText(value: unknown, fallback = '', maximum = 240) {
@@ -106,26 +112,79 @@ function normalizePhoneChats(input: unknown): CouplePhoneChatRecord[] {
   if (!Array.isArray(input)) return [];
   return input.slice(0, 8).map((item) => {
     const record = item && typeof item === 'object' ? item as Record<string, unknown> : {};
-    const messages = Array.isArray(record.messages)
-      ? record.messages.slice(0, 8).map((message) => {
-        const messageRecord = message && typeof message === 'object' ? message as Record<string, unknown> : {};
-        const rawSender = limitedText(messageRecord.sender, 'contact', 12);
-        return {
-          sender: phoneChatSenders.has(rawSender) ? rawSender as 'character' | 'contact' : 'contact',
-          time: limitedText(messageRecord.time, '--:--', 12),
-          text: limitedText(messageRecord.text, '一条没有预览的消息', 220)
-        };
-      })
-      : [];
+    const messages = normalizePhoneChatMessages(record.messages);
     return {
       contact: limitedText(record.contact, '未命名联系人', 40),
       relation: limitedText(record.relation, '联系人', 30),
       avatarEmoji: limitedText(record.avatarEmoji, '💬', 4),
       updatedAt: limitedText(record.updatedAt, '--:--', 12),
       unread: numberInRange(record.unread, 0, 99, 0),
-      summary: limitedText(record.summary, '聊了一些生活里的小事。', 220),
+      summary: limitedText(record.summary, '聊了一些生活里的小事。', 600),
       messages
     };
+  });
+}
+
+function normalizePhoneChatMessages(input: unknown): CouplePhoneChatMessage[] {
+  if (!Array.isArray(input)) return [];
+  return input.map((message) => {
+    const messageRecord = message && typeof message === 'object' ? message as Record<string, unknown> : {};
+    const rawSender = rawText(messageRecord.sender);
+    return {
+      sender: phoneChatSenders.has(rawSender) ? rawSender as 'character' | 'contact' : 'contact',
+      time: rawText(messageRecord.time),
+      text: rawText(messageRecord.text)
+    };
+  }).filter((message) => message.text);
+}
+
+function normalizeEventDetailBlocks(input: unknown): GuardianEventDetailBlock[] {
+  if (!Array.isArray(input)) return [];
+  return input.flatMap((item): GuardianEventDetailBlock[] => {
+    const record = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+    const type = rawText(record.type);
+    if (type === 'text') {
+      const label = rawText(record.label);
+      const content = rawText(record.content);
+      return label && content ? [{ type: 'text', label, content }] : [];
+    }
+    if (type === 'note') {
+      const folder = rawText(record.folder);
+      const title = rawText(record.title);
+      const content = rawText(record.content);
+      const updatedAt = rawText(record.updatedAt);
+      return folder && title && content && updatedAt ? [{
+        type: 'note',
+        folder,
+        title,
+        content,
+        updatedAt,
+        pinned: Boolean(record.pinned)
+      }] : [];
+    }
+    if (type === 'conversation') {
+      const messages = normalizePhoneChatMessages(record.messages);
+      const contact = rawText(record.contact);
+      const relation = rawText(record.relation);
+      return contact && relation && messages.length ? [{
+        type: 'conversation',
+        contact,
+        relation,
+        summary: rawText(record.summary),
+        messages
+      }] : [];
+    }
+    if (type === 'fields' && Array.isArray(record.fields)) {
+      const title = rawText(record.title);
+      const fields = record.fields.flatMap((field) => {
+        const fieldRecord = field && typeof field === 'object' ? field as Record<string, unknown> : {};
+        const label = rawText(fieldRecord.label);
+        const value = rawText(fieldRecord.value);
+        return label && value ? [{ label, value }] : [];
+      });
+      return title && fields.length ? [{ type: 'fields', title, fields }] : [];
+    }
+    return [];
   });
 }
 
@@ -138,8 +197,8 @@ function normalizeFootprints(input: unknown): CoupleFootprintRecord[] {
       kind: footprintKinds.has(rawKind) ? rawKind : 'search',
       time: limitedText(record.time, '--:--', 12),
       title: limitedText(record.title, '一条浏览记录', 90),
-      detail: limitedText(record.detail, '随手点开看了一会儿。', 240),
-      reason: limitedText(record.reason, '一时好奇', 160)
+      detail: limitedText(record.detail, '随手点开看了一会儿。', 700),
+      reason: limitedText(record.reason, '一时好奇', 400)
     };
   });
 }
@@ -159,7 +218,7 @@ function normalizeGallery(input: unknown): CoupleGalleryRecord[] {
     return {
       time: limitedText(record.time, '--:--', 12),
       title: limitedText(record.title, '没有发出的照片', 70),
-      detail: limitedText(record.detail, '角色把这个瞬间留在了相册里。', 220),
+      detail: limitedText(record.detail, '角色把这个瞬间留在了相册里。', 700),
       emoji: limitedText(record.emoji, '📷', 4),
       palette: normalizePalette(record.palette, index)
     };
@@ -173,7 +232,7 @@ function normalizeNotes(input: unknown): CoupleNoteRecord[] {
     return {
       folder: limitedText(record.folder, '备忘录', 30),
       title: limitedText(record.title, '未命名备忘', 70),
-      content: limitedText(record.content, '暂时没有写下更多内容。', 320),
+      content: limitedText(record.content, '暂时没有写下更多内容。', 2400),
       updatedAt: limitedText(record.updatedAt, '--:--', 12),
       pinned: Boolean(record.pinned)
     };
@@ -189,7 +248,7 @@ function normalizeLifeRecords(input: unknown): CoupleLifeRecord[] {
       kind: lifeRecordKinds.has(rawKind) ? rawKind : 'calendar',
       time: limitedText(record.time, '--:--', 12),
       title: limitedText(record.title, '一条生活记录', 80),
-      detail: limitedText(record.detail, '角色手机里留下的一点生活安排。', 240),
+      detail: limitedText(record.detail, '角色手机里留下的一点生活安排。', 900),
       status: limitedText(record.status, '待处理', 30)
     };
   });
@@ -252,35 +311,109 @@ export function normalizeCoupleSpaceSnapshot(input: unknown, generatedAt = Date.
   };
 }
 
-function normalizeWishes(input: unknown): CoupleWishNote[] {
+export function normalizeCoupleLifeEvents(input: unknown, generatedAt = Date.now()): CoupleLifeEvent[] {
+  if (!Array.isArray(input)) return [];
+  return input.map((item, index) => {
+    const record = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+    const rawKind = text(record.kind) as CoupleLifeEventKind;
+    const rawImportance = text(record.importance) as CoupleLifeEventImportance;
+    const rawOccurredAt = Number(record.occurredAt);
+    const rawOffsetMinutes = Number(record.offsetMinutes);
+    const detailBlocks = normalizeEventDetailBlocks(record.detailBlocks);
+    const occurredAt = Number.isFinite(rawOccurredAt)
+      ? Math.min(generatedAt, Math.round(rawOccurredAt))
+      : Number.isFinite(rawOffsetMinutes)
+        ? Math.min(generatedAt, Math.max(generatedAt - 24 * 60 * 60 * 1000, generatedAt + Math.round(rawOffsetMinutes) * 60 * 1000))
+        : generatedAt - Math.max(0, input.length - index - 1) * 1000;
+    return {
+      id: text(record.id, `couple_life_${occurredAt}_${index}_${Math.random().toString(16).slice(2)}`),
+      occurredAt,
+      kind: lifeEventKinds.has(rawKind) ? rawKind : 'activity',
+      importance: lifeEventImportances.has(rawImportance) ? rawImportance : 'notice',
+      title: rawText(record.title),
+      summary: rawText(record.summary),
+      detail: rawText(record.detail),
+      icon: rawText(record.icon),
+      ...(detailBlocks.length ? { detailBlocks } : {}),
+      ...(Number.isFinite(Number(record.battery)) ? { battery: numberInRange(record.battery, 0, 100, 0) } : {}),
+      ...(typeof record.charging === 'boolean' ? { charging: record.charging } : {}),
+      ...(text(record.app) ? { app: limitedText(record.app, '', 60) } : {}),
+      ...(text(record.location) ? { location: limitedText(record.location, '', 80) } : {}),
+      ...(activityCategories.has(text(record.activityCategory) as CoupleActivityCategory) ? { activityCategory: text(record.activityCategory) as CoupleActivityCategory } : {})
+    };
+  }).sort((first, second) => first.occurredAt - second.occurredAt);
+}
+
+export function mergeCoupleLifeEvents(existing: CoupleLifeEvent[], incoming: CoupleLifeEvent[], now = Date.now()) {
+  const earliest = now - 24 * 60 * 60 * 1000;
+  const eventByKey = new Map<string, CoupleLifeEvent>();
+  for (const event of [...existing, ...incoming]) {
+    if (!event || event.occurredAt < earliest) continue;
+    const key = event.id || `${event.occurredAt}:${event.kind}:${event.title}`;
+    eventByKey.set(key, event);
+  }
+  return [...eventByKey.values()]
+    .sort((first, second) => first.occurredAt - second.occurredAt)
+    .slice(-360);
+}
+
+export function normalizeCoupleLifeUpdate(input: unknown, generatedAt = Date.now()): CoupleLifeUpdate {
+  const source = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+  const snapshotSource = source.snapshot && typeof source.snapshot === 'object' ? source.snapshot : source;
+  return {
+    snapshot: normalizeCoupleSpaceSnapshot(snapshotSource, generatedAt),
+    events: normalizeCoupleLifeEvents(source.events, generatedAt)
+  };
+}
+
+function normalizeWishes(input: unknown, now: number): CoupleWishNote[] {
   if (!Array.isArray(input)) return [];
   return input.slice(-20).flatMap((item) => {
     if (!item || typeof item !== 'object') return [];
     const record = item as Record<string, unknown>;
     const content = text(record.content).slice(0, 120);
     if (!content) return [];
+    const createdAt = Number.isFinite(record.createdAt) ? Number(record.createdAt) : now;
+    if (createdAt < now - 24 * 60 * 60 * 1000 || createdAt > now) return [];
     return [{
       id: text(record.id, `couple_wish_${Math.random().toString(16).slice(2)}`),
       content,
-      createdAt: Number.isFinite(record.createdAt) ? Number(record.createdAt) : Date.now()
+      createdAt
     }];
   });
 }
 
-export function normalizeCoupleSpaceState(input: Partial<CoupleSpaceState> | null | undefined): CoupleSpaceState | undefined {
+function normalizeLifeState(input: unknown, snapshot: CoupleSpaceSnapshot | undefined, now: number): CoupleLifeState {
+  const source = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+  const lastAdvancedAt = Number(source.lastAdvancedAt);
+  const eventGeneratedAt = now;
+  return {
+    lastAdvancedAt: Number.isFinite(lastAdvancedAt) && lastAdvancedAt >= now - 24 * 60 * 60 * 1000 && lastAdvancedAt <= now ? Math.round(lastAdvancedAt) : 0,
+    ...(text(source.lastConversationId) ? { lastConversationId: limitedText(source.lastConversationId, '', 120) } : {}),
+    events: mergeCoupleLifeEvents([], normalizeCoupleLifeEvents(source.events, eventGeneratedAt), eventGeneratedAt)
+  };
+}
+
+export function normalizeCoupleSpaceState(input: Partial<CoupleSpaceState> | null | undefined, now = Date.now()): CoupleSpaceState | undefined {
   if (!input || typeof input !== 'object') return undefined;
-  const snapshot = input.snapshot ? normalizeCoupleSpaceSnapshot(input.snapshot) : undefined;
+  const cutoff = now - 24 * 60 * 60 * 1000;
+  const rawSnapshot = input.snapshot ? normalizeCoupleSpaceSnapshot(input.snapshot, now) : undefined;
+  const snapshot = rawSnapshot && rawSnapshot.generatedAt >= cutoff && rawSnapshot.generatedAt <= now ? rawSnapshot : undefined;
   const history = Array.isArray(input.history)
-    ? input.history.map((item) => normalizeCoupleSpaceSnapshot(item)).filter((item) => item.id !== snapshot?.id).slice(0, 11)
+    ? input.history.map((item) => normalizeCoupleSpaceSnapshot(item, now)).filter((item) => item.generatedAt >= cutoff && item.generatedAt <= now && item.id !== snapshot?.id).slice(0, 11)
     : [];
+  const enabled = input.enabled !== false && input.activityFeedEnabled !== false;
   return {
     consentGrantedAt: Math.max(0, Number(input.consentGrantedAt) || 0),
     relationshipLabel: text(input.relationshipLabel, '恋人'),
     startedAt: text(input.startedAt),
     arrivalReminderEnabled: Boolean(input.arrivalReminderEnabled),
+    enabled,
+    activityFeedEnabled: enabled,
     ...(snapshot ? { snapshot } : {}),
     history,
-    wishes: normalizeWishes(input.wishes)
+    wishes: normalizeWishes(input.wishes, now),
+    life: normalizeLifeState(input.life, snapshot, now)
   };
 }
 
@@ -290,7 +423,13 @@ export function createCoupleSpaceState(): CoupleSpaceState {
     relationshipLabel: '恋人',
     startedAt: '',
     arrivalReminderEnabled: false,
+    enabled: true,
+    activityFeedEnabled: true,
     history: [],
-    wishes: []
+    wishes: [],
+    life: {
+      lastAdvancedAt: 0,
+      events: []
+    }
   };
 }

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { requireSession } from './auth.js';
 import { config } from './config.js';
-import { createImageProxyCacheKey, ImageProxyCache, imageProxyResponseCacheTtlMs, isImageProxyUrlCacheable } from './imageProxyCache.js';
+import { createImageProxyCacheKey, ImageProxyCache, imageProxyCdnCacheTtlMs, imageProxyResponseCacheControl, imageProxyResponseCacheTtlMs, isImageProxyUrlCacheable } from './imageProxyCache.js';
 import { createTimeoutSignal, validatePublicUrl } from './security.js';
 
 const assetDownloadMaxRedirects = 4;
@@ -12,6 +12,7 @@ const mcpProxyMaxResponseBytes = 5 * 1024 * 1024;
 const mcpProxyJobTtlMs = 15 * 60 * 1000;
 const fontAssetExtensionPattern = /\.(?:css|woff2?|ttf|otf)(?:$|[?#])/i;
 const redirectStatuses = new Set([301, 302, 303, 307, 308]);
+const sharedImageAccept = 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8';
 const skippedMcpRequestHeaders = new Set([
   'accept-encoding',
   'connection',
@@ -267,10 +268,12 @@ async function bufferImageResponse(target: URL, accept: string, authorization = 
 }
 
 function sendBufferedImageResponse(reply: Parameters<typeof requireSession>[1], response: BufferedImageResponse, cacheStatus: 'HIT' | 'MISS' | 'BYPASS') {
+  const cdnCacheTtlMs = imageProxyCdnCacheTtlMs(response.cacheTtlMs, config.imageProxyCdnCacheTtlMs);
   reply.code(response.status);
   reply.header('Content-Type', response.contentType);
   reply.header('Content-Length', response.body.byteLength);
-  reply.header('Cache-Control', 'private, no-store');
+  reply.header('Cache-Control', imageProxyResponseCacheControl(cdnCacheTtlMs));
+  if (cdnCacheTtlMs > 0) reply.header('CDN-Cache-Control', imageProxyResponseCacheControl(cdnCacheTtlMs));
   reply.header('X-Link-Image-Cache', cacheStatus);
   return reply.send(response.body);
 }
@@ -393,20 +396,21 @@ export async function registerUpstreamProxy(app: FastifyInstance) {
     if (!await requireSession(request, reply)) return;
     try {
       const target = await parseTarget(String((request.query as { url?: unknown }).url ?? ''));
-      const accept = String(request.headers.accept ?? 'image/*,*/*;q=0.8');
       const authorization = String(request.headers.authorization ?? '');
-      if (!isImageProxyUrlCacheable(target, authorization)) {
+      const cacheableRequest = isImageProxyUrlCacheable(target, authorization);
+      const accept = cacheableRequest ? sharedImageAccept : String(request.headers.accept ?? sharedImageAccept);
+      if (!cacheableRequest) {
         return sendBufferedImageResponse(reply, await bufferImageResponse(target, accept, authorization), 'BYPASS');
       }
       const cacheKey = createImageProxyCacheKey(target, accept);
       const cached = await imageProxyCache.read(cacheKey);
-      if (cached) return sendBufferedImageResponse(reply, { status: 200, ...cached, cacheTtlMs: config.imageProxyCacheTtlMs }, 'HIT');
+      if (cached) return sendBufferedImageResponse(reply, { status: 200, ...cached }, 'HIT');
 
       const existingFill = imageProxyCacheFills.get(cacheKey);
       if (existingFill) {
         await existingFill.catch(() => undefined);
         const filledCache = await imageProxyCache.read(cacheKey);
-        if (filledCache) return sendBufferedImageResponse(reply, { status: 200, ...filledCache, cacheTtlMs: config.imageProxyCacheTtlMs }, 'HIT');
+        if (filledCache) return sendBufferedImageResponse(reply, { status: 200, ...filledCache }, 'HIT');
         return sendBufferedImageResponse(reply, await bufferImageResponse(target, accept), 'BYPASS');
       }
 

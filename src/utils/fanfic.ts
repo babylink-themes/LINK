@@ -43,6 +43,16 @@ export function requireFanficTrueNames(user: Pick<UserProfile, 'name'>, characte
   return { userName, characterName };
 }
 
+export function replaceFanficIdentityTokens(value: string, input: { userName: string; characterName: string }) {
+  const userName = input.userName.trim();
+  const characterName = input.characterName.trim();
+  return value
+    .replace(/\{\{\s*char\s*\}\}/gi, () => characterName)
+    .replace(/<\s*char\s*>/gi, () => characterName)
+    .replace(/\{\{\s*user\s*\}\}/gi, () => userName)
+    .replace(/<\s*user\s*>/gi, () => userName);
+}
+
 export function createFanficProfileFingerprint(user: Pick<UserProfile, 'name' | 'description'>, character: Pick<CharacterProfile, 'name' | 'description'>, additionalSourceText = '') {
   const source = `${user.name}\u0000${user.description}\u0000${character.name}\u0000${character.description}\u0000${additionalSourceText}`;
   let hash = 2166136261;

@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import {
   createImageProxyCacheKey,
   ImageProxyCache,
+  imageProxyCdnCacheTtlMs,
+  imageProxyResponseCacheControl,
   imageProxyResponseCacheTtlMs,
   isImageProxyUrlCacheable
 } from '../server/src/imageProxyCache';
@@ -19,6 +21,10 @@ assert.notEqual(createImageProxyCacheKey(publicTarget, 'image/avif'), createImag
 assert.equal(imageProxyResponseCacheTtlMs(new Headers({ 'Cache-Control': 'public, max-age=60' }), 120_000), 60_000);
 assert.equal(imageProxyResponseCacheTtlMs(new Headers({ 'Cache-Control': 'private, max-age=60' }), 120_000), 0);
 assert.equal(imageProxyResponseCacheTtlMs(new Headers({ 'Set-Cookie': 'session=secret' }), 120_000), 0);
+assert.equal(imageProxyCdnCacheTtlMs(120_000, 60_000), 60_000);
+assert.equal(imageProxyCdnCacheTtlMs(120_000, 0), 0);
+assert.equal(imageProxyResponseCacheControl(60_000), 'public, max-age=60, s-maxage=60');
+assert.equal(imageProxyResponseCacheControl(0), 'private, no-store');
 
 const cacheDirectory = await mkdtemp(join(tmpdir(), 'link-image-cache-'));
 try {
@@ -26,7 +32,9 @@ try {
   const firstKey = createImageProxyCacheKey(new URL('https://images.example.com/first.png'), 'image/*');
   const secondKey = createImageProxyCacheKey(new URL('https://images.example.com/second.png'), 'image/*');
   assert.equal(await cache.write(firstKey, Buffer.from('123456'), 'image/png', 60_000), true);
-  assert.equal((await cache.read(firstKey))?.body.toString(), '123456');
+  const firstCached = await cache.read(firstKey);
+  assert.equal(firstCached?.body.toString(), '123456');
+  assert.ok((firstCached?.cacheTtlMs ?? 0) > 0);
   assert.equal(await cache.write(secondKey, Buffer.from('abcdef'), 'image/png', 60_000), true);
   assert.equal(await cache.read(firstKey), null);
   assert.equal((await cache.read(secondKey))?.body.toString(), 'abcdef');

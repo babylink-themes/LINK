@@ -80,6 +80,7 @@ app.addHook('onRequest', async (request, reply) => {
   }
   if (publicExactPaths.has(pathname)
     || /^\/workbox-[^/]+\.js$/.test(pathname)
+    || (config.cdnPublicReleaseRedirects && /^\/__release-download\/[^/]+\/[^/]+$/.test(pathname))
     || pathname.startsWith('/api/auth/challenges/')
     || pathname === '/api/napcat/onebot'
     || pathname === '/api/releases/altstore/source.json'

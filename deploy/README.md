@@ -31,6 +31,8 @@ cp .env.example .env
 - `ALLOWED_QQ_GROUPS`：逗号分隔的全部授权 QQ 群号。
 - `BRIDGE_RELEASE_BASE_URL`：Bridge 外部安装包地址，默认使用公开 GitHub Release。
 - `IMAGE_PROXY_CACHE_TTL_HOURS`、`IMAGE_PROXY_CACHE_MAX_MB`、`IMAGE_PROXY_CACHE_ENTRY_MAX_MB`：公共图片代理共享缓存的有效期、总容量和单文件上限。
+- `IMAGE_PROXY_CDN_CACHE_TTL_HOURS`：仅对无 Authorization、无签名参数、且上游明确允许缓存的图片发送 CDN 公共缓存响应头。默认 `0`，在完成下文 CDN 规则后设为 `168`。
+- `CDN_PUBLIC_RELEASE_REDIRECTS`：开启后，已通过原下载票据或会话校验的 Android/iOS 安装包请求会跳转到不可变的公开版本文件 URL，供 CDN 缓存。默认 `false`，完成 CDN 配置后设为 `true`。
 
 生成随机值时可使用 `openssl rand -base64 48 | tr -d '\n'`。不要把 `deploy/.env`、数据库密码、NapCat Token 或 Android keystore 提交到 Git。
 
@@ -58,6 +60,20 @@ curl -I https://babylink.top/access
 ```
 
 应用静态资源默认需要登录；未登录浏览器会跳转到 `/access`。健康检查、登录口令接口和 NapCat 入口是最小公开面。
+
+## 3.1 Cloudflare CDN（无感媒体分流）
+
+这套配置不限制用户发图、看图、GIF 或安装更新；它只让可公开缓存的字节由 Cloudflare 边缘节点返回。登录、业务 API、带 Authorization 的图片、签名 URL 图片和所有私密响应仍由源站处理。
+
+1. 在 Cloudflare 添加 `babylink.top`，将 DNS 名称服务器切换到 Cloudflare 后，把根域 `A` 记录设为当前服务器 IP 并开启橙云代理；保留服务器的 `80/443` 开放，证书模式选 `Full (strict)`。
+2. 创建三条 Cache Rule（顺序从上到下）：
+	- `http.request.uri.path starts_with "/__image-download"`：Cache eligibility 选 `Eligible for cache`，Edge TTL 选“使用源站 Cache-Control；源站未发送公共缓存头时绕过缓存”（不要选择固定 TTL 或覆盖源站头）。缓存键保留完整 query string、不要把 Cookie 或 Authorization 加入缓存键。
+	- `http.request.uri.path starts_with "/__release-download/"`：Cache eligibility 选 `Eligible for cache`，Edge TTL 同样选“使用源站 Cache-Control；源站未发送公共缓存头时绕过缓存”。
+	- `http.request.uri.path starts_with "/assets/" or http.request.uri.path in {"/link-icon.png", "/link-icon-192.png", "/link-icon-maskable.png", "/default-ringtone.mp3"}`：Cache eligibility 选 `Eligible for cache`，Edge TTL 同样遵循源站 Cache-Control。
+3. 在应用的 `deploy/.env` 设置 `IMAGE_PROXY_CDN_CACHE_TTL_HOURS=168` 与 `CDN_PUBLIC_RELEASE_REDIRECTS=true`，然后重建 `app` 容器。
+4. 验收时，以已登录设备连续访问同一普通外部图片两次，第二次响应应包含 Cloudflare `CF-Cache-Status: HIT` 和 `Cache-Control: public`。带 Authorization、`token`、`signature`、`X-Amz-*` 等参数的图片必须保持 `Cache-Control: private, no-store`。安装包第一次下载会从受保护 API `302` 到 `/__release-download/...`，后者应带一年公共缓存头。
+
+`/__image-download` 的公开缓存仅适用于原本就是公共外部图床资源；任何拿到已缓存 URL 的人都可能在缓存期间读取同一张图片。因此，不要把用户上传的私密图片、含身份信息的图片 URL 或需上游授权的图片接入此路径。源站会为这些请求保留 `private, no-store`，Cloudflare 规则必须遵循该头。安装包 URL 同样只能提高二次传播门槛，不是 DRM；这与现有授权模型一致。
 
 ## 4. NapCat 配置
 

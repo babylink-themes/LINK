@@ -54,7 +54,7 @@
 | `strictRoleplayRules` | `src/services/prompt.ts` | 加强认知边界、朋友圈和 NPC 社交圈独立性。 |
 | `profileMutationPrompt` | `src/services/prompt.ts` | 要求输出 JSON；规定 text、voice、image、location、transfer、sticker、narration、撤回、引用、转账处理、线下邀约、资料修改、Mood 内心独白等格式。 |
 | `modeInstructions.online` | `src/services/prompt.ts` | 声明当前为社交软件线上聊天，并要求体现独立日程和消息节奏。 |
-| `onlineChatPunctuationPrompt` | `src/services/prompt.ts` | 线上标点符号、空格、换行和聊天语气规则。默认开启，可通过 `buildPrompt` options 关闭。 |
+| `onlineChatPunctuationPrompt` | `src/services/prompt.ts` | 线上 text 气泡禁止以句号收尾、优先省略常规标点；同时限制居高临下口癖、口头禅复读和无必要的语音条。默认开启，可通过 `buildPrompt` options 关闭。 |
 | `onlineChatRoutineCarePrompt` | `src/services/prompt.ts` | 禁止把关心偷懒写成催睡觉、催休息、催下线、催吃饭。默认开启。 |
 | `onlineStickerSemanticsPrompt` | `src/services/prompt.ts` | 要求不要过度解读用户 Sticker，优先理解文字内容。默认开启。 |
 | `narrationModePrompt` | `src/services/prompt.ts` | 仅 `context.narrationModeEnabled` 开启时注入，要求 messages 中每轮交错输出 1-5 条旁白项，位置由数组顺序决定。 |
@@ -65,7 +65,7 @@
 修订建议：
 
 - 要改线上输出 JSON 结构，优先改 `profileMutationPrompt`。
-- 要改线上语气/标点，改 `onlineChatPunctuationPrompt`。
+- 要改线上语气、标点、口癖或语音条习惯，改 `onlineChatPunctuationPrompt`。
 - 要改“不要催睡觉吃饭”等日常关心规则，改 `onlineChatRoutineCarePrompt`。
 - 要改 Sticker 理解策略，改 `onlineStickerSemanticsPrompt`。
 - 要改旁白模式的内容边界和文风，改 `narrationModePrompt`。
@@ -252,7 +252,7 @@ VOOM 评论区继续回复由 `generateVoomCommentReplies(input)` 生成。实�
 | 线上聊天 JSON 输出结构和消息类型 | `src/services/prompt.ts` 的 `profileMutationPrompt` |
 | 线下 RP JSON 输出结构和剧情选项 | `src/services/prompt.ts` 的 `offlineReplyOutputPrompt` |
 | 线下文风、视角、心理、抢话、转述、篇幅 | `src/services/prompt.ts` 的 `renderOfflineSettingsPrompt` 及 helper |
-| 线上标点规则 | `src/services/prompt.ts` 的 `onlineChatPunctuationPrompt` |
+| 线上标点、口癖与语音条规则 | `src/services/prompt.ts` 的 `onlineChatPunctuationPrompt` |
 | 线上日常关心限制 | `src/services/prompt.ts` 的 `onlineChatRoutineCarePrompt` |
 | Sticker 理解规则 | `src/services/prompt.ts` 的 `onlineStickerSemanticsPrompt` |
 | 旁白模式 | `src/services/prompt.ts` 的 `narrationModePrompt` |

@@ -93,6 +93,10 @@ function createDownloadTicket(row: ReleaseRow, qq: string) {
   return createSignedTicket({ releaseId: row.id, qq, expiresAt: Date.now() + 5 * 60 * 1000 });
 }
 
+function publicReleaseDownloadPath(release: ReleaseRow) {
+  return `/__release-download/${encodeURIComponent(release.id)}/${encodeURIComponent(safeFileName(release.file_name))}`;
+}
+
 function releasePayload(row: ReleaseRow, qq: string, currentVersionCode = 0) {
   const ticket = createDownloadTicket(row, qq);
   return {
@@ -152,12 +156,17 @@ export function desktopBridgeReleaseUrl(platform: ReleaseRow['platform'], versio
   return `${config.bridgeReleaseBaseUrl}/${tag}/${asset}`;
 }
 
-async function sendReleaseFile(reply: FastifyReply, release: ReleaseRow) {
+async function sendReleaseFile(reply: FastifyReply, release: ReleaseRow, publicCache = false) {
   const externalUrl = desktopBridgeReleaseUrl(release.platform, release.version_name);
   if (externalUrl) {
     reply.header('X-Content-SHA256', release.sha256);
     reply.header('Cache-Control', 'private, no-store');
     return reply.redirect(externalUrl);
+  }
+  if (!publicCache && config.cdnPublicReleaseRedirects) {
+    reply.header('X-Content-SHA256', release.sha256);
+    reply.header('Cache-Control', 'private, no-store');
+    return reply.redirect(publicReleaseDownloadPath(release));
   }
   const fileName = safeFileName(release.file_name);
   const filePath = join(config.releaseDir, fileName);
@@ -176,12 +185,30 @@ async function sendReleaseFile(reply: FastifyReply, release: ReleaseRow) {
   reply.header('Content-Disposition', `attachment; filename="${fileName}"`);
   reply.header('Content-Length', release.file_size);
   reply.header('X-Content-SHA256', release.sha256);
-  reply.header('Cache-Control', 'private, no-store');
+  reply.header('Cache-Control', publicCache ? 'public, max-age=31536000, s-maxage=31536000, immutable' : 'private, no-store');
+  if (publicCache) reply.header('CDN-Cache-Control', 'public, max-age=31536000');
   return reply.send(createReadStream(filePath));
 }
 
 export async function registerReleaseRoutes(app: FastifyInstance) {
   await mkdir(config.releaseDir, { recursive: true });
+
+  app.get('/__release-download/:id/:fileName', async (request, reply) => {
+    if (!config.cdnPublicReleaseRedirects) return await reply.code(404).send({ error: 'not_found' });
+    const id = String((request.params as { id?: string }).id ?? '');
+    const fileName = String((request.params as { fileName?: string }).fileName ?? '');
+    const result = await query<ReleaseRow>(`
+      SELECT id, platform, version_code, version_name, minimum_version_code, file_name, sha256, file_size::text, notes, created_at
+      FROM releases
+      WHERE id = $1
+        AND platform IN ('android', 'ios')
+        AND published = TRUE
+      LIMIT 1
+    `, [id]);
+    const release = result.rows[0];
+    if (!release || safeFileName(release.file_name) !== fileName) return await reply.code(404).send({ error: 'release_not_found' });
+    return await sendReleaseFile(reply, release, true);
+  });
 
   app.get('/api/releases/altstore/source-link', async (request, reply) => {
     const session = await requireSession(request, reply);

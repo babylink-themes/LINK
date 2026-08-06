@@ -22,7 +22,7 @@
       <img class="avatar mini" :src="avatarSource" :alt="avatarAlt" />
       <span v-if="showProfileAlert" class="mind-state-hearts" aria-hidden="true"><Heart /><Heart /><Heart /></span>
     </button>
-    <div class="bubble-wrap" :class="[`bubble-wrap-group-${groupPosition}`, { 'shop-share-wrap': message.shopShare, 'mcp-result-wrap': message.mcpResult }]">
+    <div class="bubble-wrap" :class="[`bubble-wrap-group-${groupPosition}`, { 'shop-share-wrap': message.shopShare, 'mcp-result-wrap': message.mcpResult, 'couple-activity-wrap': message.coupleActivity }]">
       <span v-if="canQuote" class="swipe-quote-cue" :class="{ visible: swipeOffset > 0, ready: swipeQuoteReady }" aria-hidden="true">
         <Quote :size="16" />
       </span>
@@ -43,7 +43,7 @@
         @selectstart.prevent.stop="suppressNativeSelection"
       >
         <span v-if="authorLabel" class="message-author-label">{{ authorLabel }}</span>
-        <div class="bubble" :class="[`bubble-group-${groupPosition}`, { narration: message.displayStyle === 'narration', sticker: message.sticker, image: message.image, voice: message.voice, location: message.location, mcpOperation: message.mcpOperations?.length, mcpResult: message.mcpResult, transfer: message.transfer, commerce: message.commerce, shopShare: message.shopShare, musicListenInvite: message.musicListenInvite, linkPreview: message.linkPreview, theaterLink: message.theaterLink, offlineInvitation: message.offlineInvitation, call: message.call, gobang: message.gobang }]" :style="bubbleStyle">
+        <div class="bubble" :class="[`bubble-group-${groupPosition}`, { narration: message.displayStyle === 'narration', sticker: message.sticker, image: message.image, voice: message.voice, location: message.location, coupleActivity: message.coupleActivity, mcpOperation: message.mcpOperations?.length, mcpResult: message.mcpResult, transfer: message.transfer, commerce: message.commerce, shopShare: message.shopShare, musicListenInvite: message.musicListenInvite, linkPreview: message.linkPreview, theaterLink: message.theaterLink, offlineInvitation: message.offlineInvitation, call: message.call, gobang: message.gobang }]" :style="bubbleStyle">
           <template v-if="message.call">
             <section class="call-message-card" :class="[`call-message-card--${message.call.status}`, `call-message-card--${message.call.mode}`, `call-message-card--${message.call.direction}`]" aria-label="通话消息">
               <div class="call-message-head">
@@ -118,6 +118,18 @@
                 <span><strong>{{ gobangCardTitle }}</strong><small>{{ gobangCardDetail }}</small></span>
                 <ChevronRight :size="15" />
               </span>
+            </section>
+          </template>
+          <template v-else-if="message.coupleActivity">
+            <section class="couple-activity-event" :class="`kind-${message.coupleActivity.kind ?? 'activity'}`" aria-label="情侣守护动态">
+              <time>{{ formatGuardianEventTime(message.coupleActivity.occurredAt ?? message.createdAt) }}</time>
+              <div class="couple-activity-event__line">
+                <span class="couple-activity-event__icon" aria-hidden="true">{{ guardianEventIcon(message.coupleActivity.kind, message.coupleActivity.icon) }}</span>
+                <p>
+                  {{ message.coupleActivity.summary }}
+                  <button v-if="guardianEventHasDetail(message.coupleActivity)" type="button" @click.stop="emit('open-couple-event', message)">查看详情</button>
+                </p>
+              </div>
             </section>
           </template>
           <template v-else-if="message.location">
@@ -341,6 +353,7 @@ import { getStickerDisplayImageUrl } from '@/utils/stickers';
 import type { MessageGroupPosition } from '@/utils/messageGrouping';
 import { normalizeTranslationText, shouldShowChineseTranslation } from '@/utils/translation';
 import { gobangStoneForPlayer } from '@/utils/gobang';
+import { formatGuardianEventTime, guardianEventHasDetail, guardianEventIcon } from '@/utils/coupleGuardianEvents';
 
 const props = withDefaults(defineProps<{
   message: ChatMessage;
@@ -390,6 +403,7 @@ const emit = defineEmits<{
   'delete-image': [messageId: string, candidateId: string, imageUrl: string];
   'busy-action': [message: string, title: string];
   'open-card-detail': [message: ChatMessage];
+  'open-couple-event': [message: ChatMessage];
   'quote-message': [message: ChatMessage];
   'accept-offline-invitation': [];
   'reject-offline-invitation': [];
@@ -507,6 +521,7 @@ const showInlineTranslation = computed(() => props.message.sender === 'char'
   && !props.message.sticker
   && !props.message.voice
   && !props.message.location
+  && !props.message.coupleActivity
   && !props.message.mcpResult
   && !props.message.commerce
   && !props.message.shopShare
@@ -588,7 +603,7 @@ function observeQuoteOverflow() {
 }
 
 const bubbleStyle = computed(() => {
-  if (props.message.sticker || props.message.image || props.message.location || props.message.mcpResult || props.message.transfer || props.message.commerce || props.message.shopShare || props.message.musicListenInvite || props.message.linkPreview || props.message.theaterLink || props.message.offlineInvitation || props.message.call || props.message.gobang) return {};
+  if (props.message.sticker || props.message.image || props.message.location || props.message.coupleActivity || props.message.mcpResult || props.message.transfer || props.message.commerce || props.message.shopShare || props.message.musicListenInvite || props.message.linkPreview || props.message.theaterLink || props.message.offlineInvitation || props.message.call || props.message.gobang) return {};
   if (props.message.displayStyle === 'narration') {
     return {
       background: props.appearance.narrationBubbleColor,
@@ -853,7 +868,7 @@ const voicePlaybackLabel = computed(() => {
 });
 
 const isSystemNarration = computed(() => props.message.sender === 'system' && props.message.displayStyle === 'narration');
-const showMessageTime = computed(() => props.appearance.showMessageTime && !props.hideMessageTime && !isSystemNarration.value && !props.message.mcpOperations?.length && !props.message.voomEventType && !props.message.voomPostId);
+const showMessageTime = computed(() => props.appearance.showMessageTime && !props.hideMessageTime && !isSystemNarration.value && !props.message.coupleActivity && !props.message.mcpOperations?.length && !props.message.voomEventType && !props.message.voomPostId);
 const showReadState = computed(() => props.appearance.showReadStatus && messageVisualSender.value !== 'system' && !props.message.voomEventType && !props.message.voomPostId);
 const showMessageMeta = computed(() => showMessageTime.value || showReadState.value);
 
@@ -1450,6 +1465,11 @@ onBeforeUnmount(() => {
 .message-row.user .bubble-wrap {
   order: 1;
   flex-direction: row-reverse;
+}
+
+.bubble-wrap.couple-activity-wrap {
+  width: auto;
+  max-width: min(330px, calc(100vw - 42px));
 }
 
 .message-failed-indicator {
@@ -3755,4 +3775,70 @@ time,
 .message-row.char .bubble.mcpResult {
   color: inherit !important;
 }
+
+.bubble.coupleActivity {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+  color: #403c39;
+  box-shadow: none;
+}
+
+.message-row.system .bubble.coupleActivity {
+  background: transparent;
+  color: #625e5a;
+  box-shadow: none;
+}
+
+.couple-activity-event {
+  display: grid;
+  justify-items: center;
+  gap: 3px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 1px 0;
+}
+
+.couple-activity-event > time {
+  color: rgba(86, 82, 78, .58);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.couple-activity-event__line {
+  display: grid;
+  grid-template-columns: 17px minmax(0, auto);
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  max-width: 100%;
+  min-height: 20px;
+}
+
+.couple-activity-event__icon {
+  display: inline-grid;
+  width: 17px;
+  height: 17px;
+  place-items: center;
+  color: #c58045;
+  font-size: 12px;
+  line-height: 1;
+  background: transparent;
+  box-shadow: none;
+}
+
+.couple-activity-event.kind-screen .couple-activity-event__icon { background: transparent; color: #767ec6; }
+.couple-activity-event.kind-app .couple-activity-event__icon { background: transparent; color: #607dc5; }
+.couple-activity-event.kind-network .couple-activity-event__icon { background: transparent; color: #519683; }
+.couple-activity-event.kind-location .couple-activity-event__icon,
+.couple-activity-event.kind-travel .couple-activity-event__icon { background: transparent; color: #c96e68; }
+.couple-activity-event.kind-activity .couple-activity-event__icon { background: transparent; color: #a06f9e; }
+.couple-activity-event__line p { max-width: min(286px, calc(100vw - 78px)); margin: 0; color: #625e5a; font-size: 11px; line-height: 1.45; text-align: center; }
+.couple-activity-event__line button { display: inline; margin: 0 0 0 3px; padding: 0; border: 0; color: #b87535; font: inherit; font-size: 10px; font-weight: 750; line-height: inherit; background: transparent; cursor: pointer; }
+.couple-activity-event__line button:focus-visible { border-radius: 3px; outline: 2px solid rgba(217, 139, 50, .45); outline-offset: 2px; }
 </style>

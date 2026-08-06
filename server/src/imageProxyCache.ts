@@ -13,6 +13,7 @@ interface ImageProxyCacheMetadata {
 export interface CachedImageProxyResponse {
   body: Buffer;
   contentType: string;
+  cacheTtlMs: number;
 }
 
 const cacheKeyPattern = /^[0-9a-f]{64}$/;
@@ -39,6 +40,18 @@ export function imageProxyResponseCacheTtlMs(headers: Headers, defaultTtlMs: num
   return Math.min(defaultTtlMs, maxAgeSeconds * 1000);
 }
 
+export function imageProxyCdnCacheTtlMs(responseCacheTtlMs: number, maximumCdnCacheTtlMs: number) {
+  if (!Number.isFinite(responseCacheTtlMs) || !Number.isFinite(maximumCdnCacheTtlMs)) return 0;
+  if (responseCacheTtlMs <= 0 || maximumCdnCacheTtlMs <= 0) return 0;
+  return Math.min(responseCacheTtlMs, maximumCdnCacheTtlMs);
+}
+
+export function imageProxyResponseCacheControl(cacheTtlMs: number) {
+  if (!Number.isFinite(cacheTtlMs) || cacheTtlMs <= 0) return 'private, no-store';
+  const cacheSeconds = Math.max(1, Math.floor(cacheTtlMs / 1000));
+  return `public, max-age=${cacheSeconds}, s-maxage=${cacheSeconds}`;
+}
+
 export class ImageProxyCache {
   constructor(
     private readonly directory: string,
@@ -61,11 +74,12 @@ export class ImageProxyCache {
     const metadataPath = this.metadataPath(key);
     try {
       const metadata = JSON.parse(await readFile(metadataPath, 'utf8')) as Partial<ImageProxyCacheMetadata>;
+      const now = Date.now();
       if (metadata.version !== 1
         || typeof metadata.contentType !== 'string'
         || !metadata.contentType.toLowerCase().startsWith('image/')
         || !Number.isSafeInteger(metadata.expiresAt)
-        || Number(metadata.expiresAt) <= Date.now()
+        || Number(metadata.expiresAt) <= now
         || !Number.isSafeInteger(metadata.size)
         || Number(metadata.size) < 1
         || Number(metadata.size) > this.maxEntryBytes) {
@@ -80,7 +94,7 @@ export class ImageProxyCache {
       const body = await readFile(bodyPath);
       const accessedAt = new Date();
       void utimes(bodyPath, accessedAt, accessedAt).catch(() => undefined);
-      return { body, contentType: metadata.contentType };
+      return { body, contentType: metadata.contentType, cacheTtlMs: Number(metadata.expiresAt) - now };
     } catch {
       return null;
     }

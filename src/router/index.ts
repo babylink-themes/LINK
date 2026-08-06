@@ -5,7 +5,6 @@ const ChatSettingsPage = () => import('@/pages/ChatSettingsPage.vue');
 const ChatSearchPage = () => import('@/pages/ChatSearchPage.vue');
 const ChatRoomPage = () => import('@/pages/ChatRoomPage.vue');
 const GobangRoomPage = () => import('@/pages/GobangRoomPage.vue');
-const CoupleSpacePage = () => import('@/pages/CoupleSpacePage.vue');
 const GroupChatPage = () => import('@/pages/GroupChatPage.vue');
 const ProfileThemePage = () => import('@/pages/ProfileThemePage.vue');
 const ThoughtChainThemePage = () => import('@/pages/ThoughtChainThemePage.vue');
@@ -83,7 +82,7 @@ export const router = createRouter({
     { path: '/chats/:id/settings', name: 'chat-settings', component: ChatSettingsPage, props: true },
     { path: '/chats/:id/profile-themes', name: 'profile-themes', component: ProfileThemePage, props: true },
     { path: '/chats/:id/thought-chain-themes', name: 'thought-chain-themes', component: ThoughtChainThemePage, props: true },
-    { path: '/chats/:id/couple-space', name: 'couple-space', component: CoupleSpacePage, props: true },
+    { path: '/chats/:id/couple-space', name: 'couple-space', redirect: (to) => ({ name: 'chat-room', params: { id: String(to.params.id) } }) },
     { path: '/chats/:id/theaters', name: 'small-theater', component: SmallTheaterPage, props: true },
     { path: '/chats/:id/gobang/:messageId', name: 'gobang-room', component: GobangRoomPage, props: true },
     { path: '/theaters/:theaterId', name: 'small-theater-detail', component: SmallTheaterDetailPage, props: true },

@@ -2,7 +2,7 @@ import { computed, ref, toRaw, watch } from 'vue';
 import { defineStore } from 'pinia';
 import { applyMemoryStoreMutation, deleteEntity, loadAllMessages, loadAllMessagesByConversation, loadAppStartupSnapshot, loadMessagesBeforeConversationCursor, loadSnapshot, pruneUnusedStoredMediaCache, putEntity, replaceSnapshot, scheduleStartupStorageMaintenance } from '@/data/db';
 import { defaultSettings } from '@/data/seed';
-import type { AppSettings, AppSnapshot, CharacterProfile, CharacterProfileHistoryEntry, CharacterProfileHistoryField, ChatCallAttachment, ChatCallMode, ChatCallStatus, ChatGobangAttachment, ChatImageAttachment, ChatImageCandidate, ChatLinkPreviewAttachment, ChatLocationAttachment, ChatMcpOperation, ChatMessage, ChatMessageQuote, ChatMode, ChatModelOverrides, ChatModelScope, ChatMusicListenInviteAttachment, ChatMusicListenInviteStatus, ChatOfflineInvitationAttachment, ChatOfflineInvitationStatus, ChatSmallTheaterLinkAttachment, ChatTransferAttachment, ChatTransferStatus, ChatVoiceAttachment, Conversation, ConversationSettings, CoupleSpaceState, FavoriteMessageKind, FavoriteMessageRecord, GenerateReplyInput, GeneratedImageRecord, GroupDiscoveryCandidate, GroupMember, GroupNpcDraft, ImageModuleId, ImageVisualScope, MusicCommentThread, MusicListeningContext, MusicTrack, ProfileHomepageRecord, ProfileTheme, SmallTheater, SmallTheaterTopic, Sticker, StickerGroup, ThoughtChainTheme, UserProfile, VisualProfile, VoomComment, VoomFrequency, VoomImageCandidate, VoomPost, VoomPostVisibility, WorldBookEntry } from '@/types/domain';
+import type { AppSettings, AppSnapshot, CharacterProfile, CharacterProfileHistoryEntry, CharacterProfileHistoryField, ChatCallAttachment, ChatCallMode, ChatCallStatus, ChatGobangAttachment, ChatImageAttachment, ChatImageCandidate, ChatLinkPreviewAttachment, ChatLocationAttachment, ChatMcpOperation, ChatMessage, ChatMessageQuote, ChatMode, ChatModelOverrides, ChatModelScope, ChatMusicListenInviteAttachment, ChatMusicListenInviteStatus, ChatOfflineInvitationAttachment, ChatOfflineInvitationStatus, ChatSmallTheaterLinkAttachment, ChatTransferAttachment, ChatTransferStatus, ChatVoiceAttachment, Conversation, ConversationSettings, CoupleSpaceSnapshot, CoupleSpaceState, FavoriteMessageKind, FavoriteMessageRecord, GenerateReplyInput, GeneratedImageRecord, GroupDiscoveryCandidate, GroupMember, GroupNpcDraft, ImageModuleId, ImageVisualScope, LifeLedger, LifeLedgerAdvanceToolRequest, LifeLedgerEvent, MusicCommentThread, MusicListeningContext, MusicTrack, ProfileHomepageRecord, ProfileTheme, SmallTheater, SmallTheaterTopic, Sticker, StickerGroup, ThoughtChainTheme, UserProfile, VisualProfile, VoomComment, VoomFrequency, VoomImageCandidate, VoomPost, VoomPostVisibility, WorldBookEntry } from '@/types/domain';
 import type { CharacterEconomySnapshot, ChatCommerceAttachment, ChatShopShareAttachment } from '@/types/commerce';
 import type { MemoryAssertion, MemoryCaptureStatus, MemoryCompressionStats, MemoryEdge, MemoryEmbeddingCache, MemoryEntity, MemoryEpisode, MemoryRecallResult, MemoryStateSnapshot, MemoryTheme } from '@/types/memory';
 import { createAccountId, createId } from '@/utils/id';
@@ -21,7 +21,7 @@ import { applyCurrentChatMemoryDefaults, chatMemoryDefaultsMigrationVersion } fr
 import { resolveMemoryEpisodeFloorRange } from '@/utils/memoryFloors';
 import { selectMemoryCaptureFloors } from '@/utils/memoryCapture';
 import { formatContentWithChineseTranslation, normalizeTranslationText } from '@/utils/translation';
-import { discoverGeneratedGroups, estimateRoleplayReplyInputTokens, fetchVendorModels, generateCoupleSpaceSnapshot, generateGroupChatReply, generateImageByProvider, generateRoleplayReply, generateSmallTheater, generateUserVoomComments, generateVoomCommentReplies, generateVoomPost, hasSelectedTextGenerationConfig, hasTextGenerationConfig, requestTextEmbedding, requestTextEmbeddings, shouldAutoGenerateMoment, type GroupDiscoveryCharacterContext, type RoleplayCallResponse, type RoleplayGobangResponse, type RoleplayReplyResult, type RoleplayReplySegment } from '@/services/ai';
+import { discoverGeneratedGroups, estimateRoleplayReplyInputTokens, fetchVendorModels, generateGroupChatReply, generateImageByProvider, generateLifeLedgerAdvance, generateRoleplayReply, generateSmallTheater, generateUserVoomComments, generateVoomCommentReplies, generateVoomPost, hasSelectedTextGenerationConfig, hasTextGenerationConfig, requestTextEmbedding, requestTextEmbeddings, shouldAutoGenerateMoment, type GroupDiscoveryCharacterContext, type RoleplayCallResponse, type RoleplayGobangResponse, type RoleplayReplyResult, type RoleplayReplySegment } from '@/services/ai';
 import { fetchMusicCoverUrl, mergeMusicTrack, refreshPlayableMusicTrack, searchMusicTracks } from '@/services/music';
 import { useMusicPlayerStore } from '@/stores/musicPlayerStore';
 import { useCommerceStore } from '@/stores/commerceStore';
@@ -38,6 +38,8 @@ import { getVoomFrequencyChance, stripVoomCommentReplyPrefix } from '@/utils/voo
 import { compressInlineImageDataUrl } from '@/utils/imageFile';
 import { collectStoredMediaLocators, hydrateStoredMediaRefs, isLocalMediaCacheUrl, materializeStoredMediaRefs } from '@/utils/mediaStorage';
 import { normalizeCoupleSpaceState } from '@/utils/coupleSpace';
+import { appendLifeLedgerEvents, lifeLedgerForCharacter, mergeLifeLedgerEvents, normalizeLifeLedger, normalizeLifeLedgerEvent, projectLifeLedgerSnapshot, recentLifeLedgerEvents } from '@/utils/lifeLedger';
+import { guardianAttachmentFromEvent, isGuardianVisibleLifeEvent } from '@/utils/coupleGuardianEvents';
 import { applyGobangMove, createGobangGame, respondGobangInvitation, updateGobangApiState } from '@/utils/gobang';
 import { createMemoryAssertionDedupeKey, createMemoryBrainId, createMemorySourceHash, createRecallUpserts, estimateMemoryTokens, fadeMemoryAccessibility, hashMemoryText, integrateMemoryExtraction, isMemorySourceSnapshotCurrent, latestMemoryStates, memoryId, recallCharacterMemory, refreshMemoryThemeReports, resolveMemoryEpisodeForgottenReason } from '@/utils/memoryGraph';
 import { consolidateMemoryThemeReport, extractTemporalMemory, generateTemporalMemoryDiary } from '@/services/memoryExtraction';
@@ -307,7 +309,6 @@ export const useAppStore = defineStore('app', () => {
   const localBackupOperation = ref<'idle' | 'exporting' | 'importing'>('idle');
   const localBackupOperationOwner = ref<'idle' | 'external' | 'store'>('idle');
   const appUpdateTransientOperations = ref<Record<string, string>>({});
-  const characterReadReceiptTimers = new Map<string, number>();
   const replyingConversationIds = ref<string[]>([]);
   const loadingReply = computed(() => replyingConversationIds.value.length > 0);
   const replyingVoomCommentPostIds = ref<string[]>([]);
@@ -707,7 +708,20 @@ export const useAppStore = defineStore('app', () => {
     allMessagesLoaded = false;
     users.value = snapshot.users.map((entry) => normalizeUserProfile(entry));
     const fallbackUserId = snapshot.settings.activeUserId || snapshot.users[0]?.id || '';
-    characters.value = snapshot.characters.map((entry) => normalizeCharacterProfile(entry, fallbackUserId));
+    const guardianRetentionNow = Date.now();
+    const normalizedGuardianCharacters = snapshot.characters.map((entry) => {
+      const normalizedCharacter = normalizeCharacterProfile(entry, fallbackUserId);
+      const lifeLedger = entry.lifeLedger
+        ? normalizeLifeLedger(entry.lifeLedger, normalizedCharacter.id, normalizedCharacter.coupleSpace, guardianRetentionNow)
+        : undefined;
+      return lifeLedger ? { ...normalizedCharacter, lifeLedger } : normalizedCharacter;
+    });
+    const changedGuardianCharacters = normalizedGuardianCharacters.filter((character, index) => {
+      const rawCharacter = snapshot.characters[index];
+      return JSON.stringify(rawCharacter?.lifeLedger) !== JSON.stringify(character.lifeLedger)
+        || JSON.stringify(rawCharacter?.coupleSpace) !== JSON.stringify(character.coupleSpace);
+    });
+    characters.value = normalizedGuardianCharacters;
     conversations.value = snapshot.conversations;
     voomPosts.value = snapshot.voomPosts.map((post) => normalizeStoredVoomPostIdentityReferences(post));
     messages.value = snapshot.messages
@@ -745,14 +759,25 @@ export const useAppStore = defineStore('app', () => {
       .filter((favorite) => favorite?.id && !keptFavoriteIds.has(favorite.id))
       .map((favorite) => favorite.id);
     const changedIdentityFavorites = favorites.value.filter((favorite, index) => JSON.stringify(favorite) !== JSON.stringify(rawFavorites[index]));
-    if (changedIdentityMessages.length || changedIdentityPosts.length || changedIdentityTheaters.length || changedIdentityMusicThreads.length || changedIdentityFavorites.length || removedFavoriteIds.length) {
+    const guardianCutoff = guardianRetentionNow - oneDayMs;
+    const staleGuardianMessageIds = messages.value
+      .filter((message) => Boolean(message.coupleActivity) && message.createdAt < guardianCutoff)
+      .map((message) => message.id);
+    if (staleGuardianMessageIds.length) {
+      const staleGuardianMessageIdSet = new Set(staleGuardianMessageIds);
+      messages.value = messages.value.filter((message) => !staleGuardianMessageIdSet.has(message.id));
+    }
+    if (changedIdentityMessages.length || changedIdentityPosts.length || changedIdentityTheaters.length || changedIdentityMusicThreads.length || changedIdentityFavorites.length || removedFavoriteIds.length || staleGuardianMessageIds.length || changedGuardianCharacters.length) {
+      const staleGuardianMessageIdSet = new Set(staleGuardianMessageIds);
       await Promise.all([
-        ...changedIdentityMessages.map((message) => putEntity('messages', message)),
+        ...changedIdentityMessages.filter((message) => !staleGuardianMessageIdSet.has(message.id)).map((message) => putEntity('messages', message)),
         ...changedIdentityPosts.map((post) => putEntity('voomPosts', createPersistableVoomPost(post))),
         ...changedIdentityTheaters.map((theater) => putEntity('smallTheaters', theater)),
         ...changedIdentityMusicThreads.map((thread) => putEntity('musicCommentThreads', thread)),
         ...changedIdentityFavorites.map((favorite) => putEntity('favorites', favorite)),
-        ...removedFavoriteIds.map((favoriteId) => deleteEntity('favorites', favoriteId))
+        ...removedFavoriteIds.map((favoriteId) => deleteEntity('favorites', favoriteId)),
+        ...staleGuardianMessageIds.map((messageId) => deleteEntity('messages', messageId)),
+        ...changedGuardianCharacters.map((character) => putEntity('characters', character))
       ]);
     }
     conversationSettings.value = snapshot.conversationSettings.map((entry) => normalizeConversationSettings({
@@ -803,6 +828,7 @@ export const useAppStore = defineStore('app', () => {
     await migrateChatMemoryDefaults();
     syncPendingIncomingCall();
     ready.value = true;
+    void pruneExpiredCoupleActivityMessages(guardianRetentionNow);
     queueMissingStickerImageCaches();
     const storedTransferMessages = messages.value.filter((message) => message.transfer && !message.transfer.responseToMessageId && message.sender !== 'system');
     for (const transferMessage of storedTransferMessages) {
@@ -928,6 +954,19 @@ export const useAppStore = defineStore('app', () => {
       allMessagesPromise = null;
     });
     return await allMessagesPromise;
+  }
+
+  async function pruneExpiredCoupleActivityMessages(now = Date.now()) {
+    const cutoff = now - oneDayMs;
+    const storedMessages = await loadAllMessages();
+    const staleMessageIds = storedMessages
+      .filter((message) => Boolean(message.coupleActivity) && message.createdAt < cutoff)
+      .map((message) => message.id);
+    if (!staleMessageIds.length) return 0;
+    const staleMessageIdSet = new Set(staleMessageIds);
+    messages.value = messages.value.filter((message) => !staleMessageIdSet.has(message.id));
+    await Promise.all(staleMessageIds.map((messageId) => deleteEntity('messages', messageId)));
+    return staleMessageIds.length;
   }
 
   function unreadCountAfterIncomingMessage(conversation: Conversation, messageCount: number) {
@@ -1310,6 +1349,37 @@ export const useAppStore = defineStore('app', () => {
     };
   }
 
+  function lifeLedgerInstructionForReply(conversation: Conversation, character: CharacterProfile, mode: ChatMode) {
+    if (mode !== 'online' || !coupleGuardianEnabled(character)) return '';
+    const ledger = lifeLedgerForCharacter(character);
+    const snapshot = projectLifeLedgerSnapshot(ledger);
+    if (!snapshot) return '';
+    const recentEvents = recentLifeLedgerEvents(ledger.events).filter(isGuardianVisibleLifeEvent).slice(-10).map((event) => {
+      const time = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(event.occurredAt);
+      return `${time} ${event.title}：${event.summary}`;
+    });
+    return [
+      'LifeLedger 连续生活事实：这是角色唯一且已经发生、且用户尚未在聊天或其他公开表面看见的角色生活线。你的回复只能自然反映角色本来知道的状态；不能提及账本、系统或设备监控，也不能把当前私聊、用户所在群聊、VOOM、通话或已读状态重新写成生活事实。',
+      `当前：${snapshot.location.place}；${snapshot.location.status}；手机${snapshot.device.battery}%${snapshot.device.charging ? '，正在充电' : ''}；${snapshot.device.screenStatus === 'using' ? `正在使用 ${snapshot.device.activeApp}` : snapshot.device.screenStatus === 'locked' ? '手机已锁屏' : '暂时放下手机'}；网络 ${snapshot.device.network}。`,
+      recentEvents.length ? `最近生活事件：${recentEvents.join('；')}` : ''
+    ].filter(Boolean).join('\n');
+  }
+
+  function lifeLedgerAdvanceToolForReply(conversation: Conversation, character: CharacterProfile, mode: ChatMode) {
+    if (mode !== 'online' || conversation.kind === 'group' || !coupleGuardianEnabled(character)) return undefined;
+    const modelOverride = getGlobalTextModelOverride('content');
+    if (!hasConfiguredTextModel(modelOverride)) return undefined;
+    return async (request: LifeLedgerAdvanceToolRequest) => {
+      const result = await advanceCharacterLife(conversation.id, {
+        silent: true,
+        announce: true,
+        instruction: request
+      }, character.id);
+      if (!result) throw new Error('LifeLedger 没有保存新的连续生活事实。');
+      return { snapshot: result.snapshot, events: result.events };
+    };
+  }
+
   async function buildRoleplayReplyInputForConversation(conversationId: string, options: BuildRoleplayReplyInputOptions = {}): Promise<RoleplayReplyInputBundle | null> {
     await ensureConversationMessagesLoaded(conversationId);
     const conversation = conversationById(conversationId);
@@ -1344,6 +1414,14 @@ export const useAppStore = defineStore('app', () => {
       embeddingModelOverride: getMemoryEmbeddingModelOverride(chatSettings),
       excludeSourceMessageIds: options.excludeSourceMessageIds
     });
+    const baseReplyInstruction = options.replyInstruction
+      ? options.replyInstruction
+      : options.proactive
+        ? `这不是用户刚发来的新消息，而是${getCharacterAiName(character)}在自己的生活节奏里主动联系${getUserAiName(boundUser)}。请基于最近对话、关系状态、时间流逝和角色当前生活，生成一组自然的主动消息；不要假装用户刚说了什么，也不要替用户发言。`
+        : '';
+    const replyInstruction = [baseReplyInstruction, lifeLedgerInstructionForReply(conversation, character, mode)]
+      .filter(Boolean)
+      .join('\n\n') || undefined;
 
     return {
       conversation,
@@ -1372,11 +1450,7 @@ export const useAppStore = defineStore('app', () => {
         offlineSettings: chatSettings.offline,
         musicListening: musicListeningContextForConversation(conversationId),
         characterEconomy,
-        replyInstruction: options.replyInstruction
-          ? options.replyInstruction
-          : options.proactive
-          ? `这不是用户刚发来的新消息，而是${getCharacterAiName(character)}在自己的生活节奏里主动联系${getUserAiName(boundUser)}。请基于最近对话、关系状态、时间流逝和角色当前生活，生成一组自然的主动消息；不要假装用户刚说了什么，也不要替用户发言。`
-          : undefined,
+        replyInstruction,
         activeProfileTheme: activeProfileTheme
           ? {
               id: activeProfileTheme.id,
@@ -1409,7 +1483,8 @@ export const useAppStore = defineStore('app', () => {
         settings: settings.value ?? undefined,
         modelOverride,
         requestRecovery: chatSettings.requestRecovery,
-        persistSettings: saveSettings
+        persistSettings: saveSettings,
+        lifeLedgerAdvanceTool: lifeLedgerAdvanceToolForReply(conversation, character, mode)
       }
     };
   }
@@ -4591,11 +4666,15 @@ export const useAppStore = defineStore('app', () => {
       const speaker = message.sender === 'user' ? getUserAiName(boundUser) : message.sender === 'char' ? getCharacterAiName(character) : '系统';
       return `${speaker}：${messageReadableContent(message)}`;
     }).join('\n');
+    const lifeSnapshot = projectLifeLedgerSnapshot(lifeLedgerForCharacter(character));
+    const lifeContext = lifeSnapshot
+      ? `【角色当前 LifeLedger】${lifeSnapshot.location.place}；${lifeSnapshot.location.status}；手机 ${lifeSnapshot.device.battery}%${lifeSnapshot.device.charging ? '（充电中）' : ''}；${lifeSnapshot.device.screenStatus === 'using' ? `正在使用 ${lifeSnapshot.device.activeApp}` : lifeSnapshot.device.screenStatus === 'locked' ? '手机已锁屏' : '暂时放下手机'}；网络 ${lifeSnapshot.device.network}`
+      : '';
     return {
       character,
       conversationSummary: privateConversation?.summary ?? '',
       memorySummary: privateConversation ? memoryContextForConversation(privateConversation.id, recentConversation, { storeDebug: false }) : '',
-      recentConversation,
+      recentConversation: [lifeContext, recentConversation].filter(Boolean).join('\n'),
       localWorldBooks: worldBooks.value.filter((book) => book.scope === 'local' && character.localWorldBookIds.includes(book.id))
     };
   }
@@ -5022,6 +5101,9 @@ export const useAppStore = defineStore('app', () => {
     if (!conversation || conversation.kind !== 'group' || !activeUser || !conversation.groupMembers?.length || isConversationReplying(conversationId)) return [];
     const runId = startConversationReply(conversationId);
     if (!runId) return [];
+    const replyCancelVersion = replyCancelVersions.get(conversationId) ?? 0;
+    const replyRequestAbortController = new AbortController();
+    activeReplyRequestAbortControllers.set(conversationId, replyRequestAbortController);
     try {
       const recentMessages = messagesForConversation(conversationId).filter((message) => !message.contextOnly).slice(-36);
       const groupMessageContent = (message: ChatMessage | ChatMessageQuote) => {
@@ -5060,8 +5142,10 @@ export const useAppStore = defineStore('app', () => {
         membershipStatus: groupUserMember(conversation)?.membershipStatus ?? 'active',
         mode: conversation.activeMode,
         settings: settings.value ?? undefined,
-        modelOverride: getConversationTextModelOverride(chatSettings, conversation.activeMode)
+        modelOverride: getConversationTextModelOverride(chatSettings, conversation.activeMode),
+        signal: replyRequestAbortController.signal
       });
+      if (isReplyRunCancelled(conversationId, replyCancelVersion)) return [];
       const baseTime = Date.now();
       const replyBatchId = createId('group-reply');
       const generatedMessages = generated.messages.map((entry, index) => {
@@ -5084,7 +5168,8 @@ export const useAppStore = defineStore('app', () => {
       });
       if (generatedMessages.length) {
         const deliveredMessages = await publishReplyBatch(conversationId, generatedMessages, {
-          stageOnline: conversation.activeMode === 'online'
+          stageOnline: conversation.activeMode === 'online',
+          cancelVersion: replyCancelVersion
         });
         if (!deliveredMessages.length) return [];
         const latestConversation = conversationById(conversationId) ?? conversation;
@@ -5110,9 +5195,13 @@ export const useAppStore = defineStore('app', () => {
       void maybeAutoCaptureConversationMemory(conversationId);
       return generatedMessages;
     } catch (error) {
+      if (isReplyRunCancelled(conversationId, replyCancelVersion)) return [];
       showConfigAlert(error instanceof Error ? error.message : '群聊回复生成失败。', '无法生成群聊回复');
       return [];
     } finally {
+      if (activeReplyRequestAbortControllers.get(conversationId) === replyRequestAbortController) {
+        activeReplyRequestAbortControllers.delete(conversationId);
+      }
       finishConversationReply(conversationId, runId);
     }
   }
@@ -5542,7 +5631,7 @@ export const useAppStore = defineStore('app', () => {
       .map((post) => postUpdateMap.get(post.id) ?? post);
 
     const nextCharacter = normalizeCharacterProfile({
-      ...character,
+      ...resetCoupleGuardianState(character),
       nickname: initialProfile.nickname,
       signature: initialProfile.signature,
       initialProfile,
@@ -6378,6 +6467,8 @@ export const useAppStore = defineStore('app', () => {
   }
 
   async function markUserMessagesReadByCharacter(conversationId: string, sentBefore: number) {
+    const conversation = conversationById(conversationId);
+    if (!conversation) return;
     const unreadMessages = messagesForConversation(conversationId)
       .filter((message) => message.mode === 'online'
         && message.sender === 'user'
@@ -6388,21 +6479,6 @@ export const useAppStore = defineStore('app', () => {
     const readById = new Map(unreadMessages.map((message) => [message.id, message]));
     messages.value = messages.value.map((message) => readById.get(message.id) ?? message);
     await Promise.all(unreadMessages.map((message) => putEntity('messages', message)));
-  }
-
-  function scheduleCharacterReadReceipt(conversationId: string, sentBefore: number) {
-    const previousTimer = characterReadReceiptTimers.get(conversationId);
-    if (previousTimer !== undefined) window.clearTimeout(previousTimer);
-    const unreadCount = messagesForConversation(conversationId)
-      .filter((message) => message.mode === 'online' && message.sender === 'user' && message.readAt === null && message.createdAt <= sentBefore)
-      .length;
-    if (!unreadCount) return;
-    const delay = 700 + Math.min(1_300, unreadCount * 180 + conversationId.length * 37 % 900);
-    const timer = window.setTimeout(() => {
-      characterReadReceiptTimers.delete(conversationId);
-      void markUserMessagesReadByCharacter(conversationId, sentBefore);
-    }, delay);
-    characterReadReceiptTimers.set(conversationId, timer);
   }
 
   async function appendUserMessage(conversationId: string, content: string, quote?: ChatMessageQuote | null) {
@@ -8614,7 +8690,11 @@ export const useAppStore = defineStore('app', () => {
     activeReplyRequestAbortControllers.set(conversationId, replyRequestAbortController);
     const generationStartedAt = Date.now();
     if (conversation.activeMode === 'online' && conversation.kind !== 'group') {
-      scheduleCharacterReadReceipt(conversationId, generationStartedAt);
+      const latestCharacter = characterById(character.id) ?? character;
+      const snapshot = projectLifeLedgerSnapshot(lifeLedgerForCharacter(latestCharacter), generationStartedAt);
+      if (snapshot?.device.screenStatus === 'using' && snapshot.device.activeApp === 'LINK') {
+        await markUserMessagesReadByCharacter(conversationId, generationStartedAt);
+      }
     }
     let streamingPreviewMessageId = '';
     const clearStreamingPreview = () => {
@@ -9723,6 +9803,11 @@ export const useAppStore = defineStore('app', () => {
     }
     generatingMomentConversationIds.add(conversationId);
     try {
+      const latestCharacter = characterById(character.id) ?? character;
+      const lifeSnapshot = projectLifeLedgerSnapshot(lifeLedgerForCharacter(latestCharacter));
+      const lifeContext = lifeSnapshot
+        ? `\n【角色当前 LifeLedger】${lifeSnapshot.location.place}；${lifeSnapshot.location.status}；手机 ${lifeSnapshot.device.battery}%${lifeSnapshot.device.charging ? '（充电中）' : ''}；${lifeSnapshot.device.screenStatus === 'using' ? `正在使用 ${lifeSnapshot.device.activeApp}` : lifeSnapshot.device.screenStatus === 'locked' ? '手机已锁屏' : '暂时放下手机'}。VOOM 必须是该生活线中真实发生过的分享，不能与此矛盾。`
+        : '';
       const recentVoomPosts = voomPosts.value
         .filter((post) => post.authorType !== 'user' && (post.charId === character.id || post.conversationId === conversationId || post.conversationIds?.includes(conversationId)))
         .sort((first, second) => second.createdAt - first.createdAt)
@@ -9736,7 +9821,7 @@ export const useAppStore = defineStore('app', () => {
           messages: visibleMessagesForConversation(conversationId),
           recentVoomPosts,
           worldBooks: worldBooks.value,
-          conversationSummary: conversation.summary,
+          conversationSummary: `${conversation.summary}${lifeContext}`,
           memorySummary: await memoryContextForConversationAsync(conversationId, visibleMessagesForConversation(conversationId).slice(-8).map((message) => messageReadableContent(message)).join('\n'), {
             embeddingModelOverride: getMemoryEmbeddingModelOverride(chatSettings)
           }),
@@ -10317,53 +10402,190 @@ export const useAppStore = defineStore('app', () => {
     return coupleSpace;
   }
 
+  function resetCoupleGuardianState(character: CharacterProfile) {
+    const { lifeLedger: _lifeLedger, coupleSpace: currentCoupleSpace, ...characterWithoutGuardian } = character;
+    const coupleSpace = normalizeCoupleSpaceState(currentCoupleSpace);
+    if (!coupleSpace) return characterWithoutGuardian;
+    const { snapshot: _snapshot, ...coupleSpaceWithoutSnapshot } = coupleSpace;
+    return {
+      ...characterWithoutGuardian,
+      coupleSpace: {
+        ...coupleSpaceWithoutSnapshot,
+        history: [],
+        wishes: [],
+        life: {
+          lastAdvancedAt: 0,
+          events: []
+        }
+      }
+    };
+  }
+
+  async function clearCoupleGuardianHistory(characterId: string) {
+    const character = characterById(characterId);
+    if (!character) return false;
+    await ensureAllMessagesLoaded();
+    const conversationIds = new Set(conversations.value
+      .filter((conversation) => conversation.charId === characterId)
+      .map((conversation) => conversation.id));
+    const guardianMessageIds = messages.value
+      .filter((message) => conversationIds.has(message.conversationId) && Boolean(message.coupleActivity))
+      .map((message) => message.id);
+
+    await saveCharacterSnapshot(resetCoupleGuardianState(character));
+    if (guardianMessageIds.length) await deleteMessages(guardianMessageIds);
+    return true;
+  }
+
+  const advancingLifeLedgerCharacterIds = new Set<string>();
+
+  interface CharacterLifeAdvanceResult {
+    ledger: LifeLedger;
+    snapshot: CoupleSpaceSnapshot;
+    events: LifeLedgerEvent[];
+  }
+
+  function coupleGuardianEnabled(character: CharacterProfile | null | undefined) {
+    return Boolean(character?.coupleSpace?.consentGrantedAt) && character?.coupleSpace?.enabled !== false;
+  }
+
+  async function saveCharacterLifeLedger(characterId: string, nextLedger: LifeLedger) {
+    const character = characterById(characterId);
+    if (!character) return null;
+    const lifeLedger = normalizeLifeLedger(nextLedger, characterId, character.coupleSpace);
+    await saveCharacterSnapshot({ ...character, lifeLedger });
+    return lifeLedger;
+  }
+
+  function latestLifeLedgerEvents(events: LifeLedgerEvent[]) {
+    return events.filter(isGuardianVisibleLifeEvent).slice(-4);
+  }
+
+  async function appendCoupleActivityMessage(conversationId: string, snapshot: NonNullable<ReturnType<typeof projectLifeLedgerSnapshot>>, events: LifeLedgerEvent[]) {
+    const conversation = conversationById(conversationId);
+    const visibleEvents = events.filter(isGuardianVisibleLifeEvent);
+    if (!conversation || !visibleEvents.length) return null;
+    const character = characterById(conversation.charId);
+    if (!character || !coupleGuardianEnabled(character) || character.coupleSpace?.activityFeedEnabled === false) return null;
+    const announcedAt = Date.now();
+    const activityMessages = visibleEvents.map((event, index) => ({
+      id: createId('msg'),
+      conversationId,
+      sender: 'system' as const,
+      authorType: 'system' as const,
+      authorName: '情侣守护',
+      mode: 'online' as const,
+      content: `[情侣守护] ${event.summary}`,
+      coupleActivity: guardianAttachmentFromEvent(event, snapshot.id, snapshot),
+      createdAt: announcedAt + index,
+      status: 'sent' as const
+    } satisfies ChatMessage));
+    messages.value.push(...activityMessages);
+    await Promise.all(activityMessages.map((message) => putEntity('messages', message)));
+    const nextConversation = { ...conversation, updatedAt: activityMessages.at(-1)?.createdAt ?? announcedAt };
+    const index = conversations.value.findIndex((item) => item.id === conversationId);
+    if (index >= 0) conversations.value[index] = nextConversation;
+    await putEntity('conversations', nextConversation);
+    return activityMessages.at(-1) ?? null;
+  }
+
+  async function advanceCharacterLife(conversationId: string, options: { announce?: boolean; silent?: boolean; instruction?: LifeLedgerAdvanceToolRequest } = {}, targetCharacterId?: string): Promise<CharacterLifeAdvanceResult | null> {
+    const conversation = conversationById(conversationId);
+    const characterId = targetCharacterId || conversation?.charId;
+    if (!conversation || !characterId || conversation.activeMode !== 'online' || advancingLifeLedgerCharacterIds.has(characterId)) return null;
+    const character = characterById(characterId);
+    if (!character) return null;
+    if (!coupleGuardianEnabled(character)) {
+      if (!options.silent) showConfigAlert('情侣守护已关闭，不会生成或更新生活账本。重新开启后才可继续。', '情侣守护已关闭');
+      return null;
+    }
+    const boundUser = userById(conversation.userId || character.boundUserId) ?? user.value;
+    if (!boundUser) return null;
+    const modelOverride = getGlobalTextModelOverride('content');
+    if (!hasConfiguredTextModel(modelOverride)) {
+      if (!options.silent) showConfigAlert('请先在设置的模型切换中配置全局内容创作模型，再推进角色的连续生活。', '需要配置模型');
+      return null;
+    }
+    const now = Date.now();
+    const currentLedger = lifeLedgerForCharacter(character);
+    advancingLifeLedgerCharacterIds.add(character.id);
+    try {
+      const chatSettings = settingsForConversation(conversationId);
+      const visibleMessages = visibleMessagesForConversation(conversationId)
+        .filter((message) => message.createdAt >= now - oneDayMs)
+        .slice(-30);
+      const recentLedgerEvents = recentLifeLedgerEvents(currentLedger.events, now);
+      const update = await generateLifeLedgerAdvance({
+        context: {
+          user: boundUser,
+          character,
+          boundUser,
+          mode: conversation.activeMode,
+          messages: visibleMessages,
+          worldBooks: worldBooks.value,
+          conversationSummary: conversation.summary,
+          memorySummary: await memoryContextForConversationAsync(conversationId, visibleMessages.slice(-10).map((message) => messageReadableContent(message)).join('\n'), {
+            embeddingModelOverride: getMemoryEmbeddingModelOverride(chatSettings)
+          }),
+          stickerVisionEnabled: chatSettings.stickerVisionEnabled,
+          timeAwareness: chatSettings.timeAwareness,
+          timeAwarenessNow: now,
+          musicListening: musicListeningContextForConversation(conversationId)
+        },
+        previousSnapshot: projectLifeLedgerSnapshot(currentLedger, now),
+        previousEvents: recentLedgerEvents,
+        lastAdvancedAt: currentLedger.lastAdvancedAt,
+        advanceInstruction: options.instruction,
+        settings: settings.value ?? undefined,
+        modelOverride
+      });
+      const latestCharacter = characterById(character.id) ?? character;
+      const latestLedger = lifeLedgerForCharacter(latestCharacter);
+      const completedAt = Date.now();
+      const lowerBound = now - oneDayMs;
+      const generatedEvents = update.events
+        .filter((event) => event.occurredAt >= lowerBound && event.occurredAt <= completedAt)
+        .map((event) => normalizeLifeLedgerEvent({ ...event, source: 'life-advance', conversationId, surface: 'guardian' }, event.occurredAt));
+      if (!generatedEvents.length) throw new Error('情侣守护生活推进没有返回可追加的新生活事件。');
+      const mergedEvents = mergeLifeLedgerEvents(latestLedger.events, generatedEvents);
+      const nextLedger = appendLifeLedgerEvents({
+        ...latestLedger,
+        current: update.snapshot,
+        lastAdvancedAt: completedAt,
+        updatedAt: completedAt,
+        contentAdvanceCount: latestLedger.contentAdvanceCount + 1,
+        events: mergedEvents
+      }, []);
+      const savedLedger = await saveCharacterLifeLedger(character.id, nextLedger);
+      const snapshot = savedLedger ? projectLifeLedgerSnapshot(savedLedger, completedAt) : undefined;
+      const announcedEvents = latestLifeLedgerEvents(generatedEvents);
+      if (options.announce && snapshot && latestCharacter.coupleSpace?.consentGrantedAt && announcedEvents.length) {
+        await appendCoupleActivityMessage(conversationId, snapshot, announcedEvents);
+      }
+      return savedLedger && snapshot ? { ledger: savedLedger, snapshot, events: generatedEvents } : null;
+    } finally {
+      advancingLifeLedgerCharacterIds.delete(character.id);
+    }
+  }
+
+  async function advanceCoupleLife(conversationId: string, options: { announce?: boolean; silent?: boolean } = {}) {
+    const result = await advanceCharacterLife(conversationId, options);
+    return result?.snapshot ?? null;
+  }
+
   async function refreshCoupleSpace(conversationId: string) {
     const conversation = conversationById(conversationId);
     if (!conversation) return null;
     const character = characterById(conversation.charId);
     if (!character?.coupleSpace?.consentGrantedAt) {
-      showConfigAlert('请先确认双方自愿共享，再同步情侣空间。', '需要共享授权');
+      showConfigAlert('请先确认双方自愿共享，再同步情侣守护。', '需要共享授权');
       return null;
     }
-    const boundUser = userById(conversation.userId || character.boundUserId) ?? user.value;
-    if (!boundUser) return null;
-    const chatSettings = settingsForConversation(conversationId);
-    const modelOverride = getGlobalTextModelOverride('content');
-    if (!hasConfiguredTextModel(modelOverride)) {
-      showConfigAlert('请先在设置的模型切换中配置全局内容创作模型，再同步情侣空间。', '需要配置模型');
+    if (character.coupleSpace.enabled === false) {
+      showConfigAlert('情侣守护已关闭，不会调用内容模型或更新生活账本。', '情侣守护已关闭');
       return null;
     }
-
-    const visibleMessages = visibleMessagesForConversation(conversationId);
-    const snapshot = await generateCoupleSpaceSnapshot({
-      context: {
-        user: boundUser,
-        character,
-        boundUser,
-        mode: conversation.activeMode,
-        messages: visibleMessages,
-        worldBooks: worldBooks.value,
-        conversationSummary: conversation.summary,
-        memorySummary: await memoryContextForConversationAsync(conversationId, visibleMessages.slice(-10).map((message) => messageReadableContent(message)).join('\n'), {
-          embeddingModelOverride: getMemoryEmbeddingModelOverride(chatSettings)
-        }),
-        stickerVisionEnabled: chatSettings.stickerVisionEnabled,
-        timeAwareness: chatSettings.timeAwareness,
-        timeAwarenessNow: Date.now(),
-        musicListening: musicListeningContextForConversation(conversationId)
-      },
-      previousSnapshot: character.coupleSpace.snapshot,
-      settings: settings.value ?? undefined,
-      modelOverride
-    });
-    const latestCharacter = characterById(character.id) ?? character;
-    const currentState = normalizeCoupleSpaceState(latestCharacter.coupleSpace) ?? character.coupleSpace;
-    const history = [
-      ...(currentState.snapshot ? [currentState.snapshot] : []),
-      ...currentState.history
-    ].filter((item, index, items) => items.findIndex((candidate) => candidate.id === item.id) === index).slice(0, 11);
-    await saveCoupleSpaceState(character.id, { ...currentState, snapshot, history });
-    return snapshot;
+    return await advanceCoupleLife(conversationId, { announce: true });
   }
 
   async function createSmallTheaterFromConversation(conversationId: string, topicId?: string, options?: { silent?: boolean }) {
@@ -11584,6 +11806,8 @@ export const useAppStore = defineStore('app', () => {
     saveVisualProfile,
     saveCharacter,
     saveCoupleSpaceState,
+    clearCoupleGuardianHistory,
+    advanceCoupleLife,
     refreshCoupleSpace,
     deleteCharacterProfileHistoryEntry,
     clearCharacterProfileHistory,

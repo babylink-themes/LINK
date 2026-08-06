@@ -58,6 +58,7 @@
               @busy-action="store.showConfigAlert"
               @long-press="openMessageActions"
               @open-card-detail="openCardDetail"
+              @open-couple-event="openCoupleEventDetail"
               @open-gobang="openGobangMessage"
               @open-profile="openCharacterProfile"
               @open-turn-trace="openTurnApiTrace"
@@ -75,9 +76,9 @@
           </template>
         </div>
       </div>
-      <div v-if="currentConversationReplying" class="typing-indicator">
+      <button v-if="currentConversationReplying" class="typing-indicator" type="button" aria-label="取消当前回复" title="点击取消当前回复" @click="showCancelReplyConfirm = true">
         <span></span><span></span><span></span>
-      </div>
+      </button>
     </main>
 
     <section v-if="selectionMode" class="selection-toolbar">
@@ -457,6 +458,17 @@
       </section>
     </AppModal>
 
+    <AppModal v-model="showCancelReplyConfirm" title="取消回复" :show-header="false" variant="ins">
+      <section class="delete-confirm-sheet">
+        <h3>取消这次回复？</h3>
+        <p>将停止本次 API 回复；已经显示的消息会保留。</p>
+        <div class="delete-confirm-actions">
+          <button class="secondary-action" type="button" @click="showCancelReplyConfirm = false">继续等待</button>
+          <button class="danger-action" type="button" @click="confirmCancelReply">确认取消</button>
+        </div>
+      </section>
+    </AppModal>
+
     <AppModal v-model="showRegeneratePrompt" title="重新回复引导" :show-header="false" variant="ins">
       <form class="regenerate-prompt-sheet" @submit.prevent="confirmRegenerateReply">
         <span>重新回复</span>
@@ -780,7 +792,7 @@
     <AppModal v-model="showClearHistoryConfirm" title="确认清空" :show-header="false" variant="ins">
       <section class="delete-confirm-sheet">
         <h3>清空 {{ characterDisplayName }} 的记忆？</h3>
-        <p>会删除该角色的线上聊天、线下 RP、VOOM 关联、记忆手册、主页展示资料和心境状态；好友、聊天设置、角色基础资料和绑定局部世界书都会保留。</p>
+        <p>会删除该角色的线上聊天、线下 RP、VOOM 关联、记忆手册、主页展示资料、心境状态，以及情侣守护的账本、快照、心愿和守护卡片；好友、聊天设置、角色基础资料、情侣守护授权开关和绑定局部世界书都会保留。</p>
         <div class="delete-confirm-actions">
           <button class="secondary-action" type="button" :disabled="clearingHistory" @click="showClearHistoryConfirm = false">取消</button>
           <button class="danger-action" type="button" :disabled="clearingHistory || chatActionLocked" @click="confirmClearHistory">{{ clearingHistory ? '清空中' : '确认清空' }}</button>
@@ -810,6 +822,12 @@
       :character-name="characterDisplayName"
       :character-avatar="character.avatar"
     />
+    <AppModal v-model="showCoupleGuardian" :title="`${characterDisplayName} 的情侣守护`" variant="ins" fixed-height>
+      <CoupleGuardianPanel :conversation-id="props.id" :character="character" />
+    </AppModal>
+    <AppModal v-model="showCoupleEventDetail" :title="selectedCoupleEvent?.title ?? '守护事件详情'" variant="ins">
+      <CoupleGuardianEventDetail v-if="selectedCoupleEvent" :event="selectedCoupleEvent" />
+    </AppModal>
 
   </section>
   <section v-else class="screen no-tabs empty-state">会话不存在</section>
@@ -826,6 +844,9 @@ import ChatHeader from '@/components/chat/ChatHeader.vue';
 import ChatModelSwitchPanel from '@/components/chat/ChatModelSwitchPanel.vue';
 import ChatTurnTraceModal from '@/components/chat/ChatTurnTraceModal.vue';
 import CharacterProfileSheet from '@/components/chat/CharacterProfileSheet.vue';
+import CoupleGuardianEventDetail from '@/components/chat/CoupleGuardianEventDetail.vue';
+import CoupleGuardianPanel from '@/components/chat/CoupleGuardianPanel.vue';
+import { lifeLedgerForCharacter, projectLifeLedgerSnapshot } from '@/utils/lifeLedger';
 import MessageBubble from '@/components/chat/MessageBubble.vue';
 import MessageComposer from '@/components/chat/MessageComposer.vue';
 import UserProfileSheet from '@/components/chat/UserProfileSheet.vue';
@@ -836,8 +857,9 @@ import { generateImageByProvider } from '@/services/ai';
 import { planImageVisualState } from '@/services/imageVisualPlanner';
 import { purgeFriendData } from '@/services/friendDeletion';
 import { synthesizeSpeech } from '@/services/tts';
-import type { AppSettings, CharacterImageProfile, CharacterProfile, ChatApiTrace, ChatCallMode, ChatCallStatus, ChatImageAttachment, ChatLocationAttachment, ChatMessage, ChatMessageQuote, ChatTransferStatus, ChatVoiceAttachment, ImageProviderType, Sticker, UserProfile } from '@/types/domain';
+import type { AppSettings, CharacterImageProfile, CharacterProfile, ChatApiTrace, ChatCallMode, ChatCallStatus, ChatCoupleActivityAttachment, ChatImageAttachment, ChatLocationAttachment, ChatMessage, ChatMessageQuote, ChatTransferStatus, ChatVoiceAttachment, ImageProviderType, LifeLedgerEvent, Sticker, UserProfile } from '@/types/domain';
 import { getCharacterAiName, getCharacterDisplayName, getFriendRelationship } from '@/utils/character';
+import { guardianAttachmentFromEvent, isGuardianVisibleAttachment } from '@/utils/coupleGuardianEvents';
 import { readChatImageFile } from '@/utils/imageFile';
 import { useKeyboardScrollGuard } from '@/utils/keyboardScrollGuard';
 import { resolveMessageGroupPositions, type MessageGroupPosition } from '@/utils/messageGrouping';
@@ -982,6 +1004,9 @@ const showUserProfile = ref(false);
 const showActionMenu = ref(false);
 const showRegeneratePrompt = ref(false);
 const showModelSwitch = ref(false);
+const showCoupleGuardian = ref(false);
+const showCoupleEventDetail = ref(false);
+const selectedCoupleEvent = ref<ChatCoupleActivityAttachment | null>(null);
 const showTurnTrace = ref(false);
 const selectedTurnTrace = ref<ChatApiTrace | null>(null);
 const showStickers = ref(false);
@@ -993,6 +1018,7 @@ const showTransferPanel = ref(false);
 const showCommercePanel = ref(false);
 const showMusicListenPanel = ref(false);
 const showStopListenConfirm = ref(false);
+const showCancelReplyConfirm = ref(false);
 const showNarrationPanel = ref(false);
 const showMessageMenu = ref(false);
 const showEditModal = ref(false);
@@ -1181,6 +1207,7 @@ const relationshipStateDescription = computed(() => {
   return relationship.value.reason || `${relationshipUserName.value}可以向${relationshipCharacterName.value}发送好友验证，尝试重新建立联系。`;
 });
 const characterDisplayName = computed(() => character.value ? getCharacterDisplayName(character.value) : '该好友');
+const guardianSnapshot = computed(() => character.value?.coupleSpace?.consentGrantedAt ? projectLifeLedgerSnapshot(lifeLedgerForCharacter(character.value)) : undefined);
 const boundUser = computed(() => {
   const userId = conversation.value?.userId || character.value?.boundUserId || '';
   return userId ? store.userById(userId) ?? null : null;
@@ -1222,12 +1249,25 @@ const characterImageProfile = computed<CharacterImageProfile>(() => ({
 }));
 const allOnlineMessages = computed(() => {
   const messages = store.messagesForConversation(props.id).filter((message) => message.mode === 'online');
-  const displayMessages = messages.filter((message) => !message.contextOnly && !message.gobangId && !isVoomNarrationMessage(message) && !isCallSubtitleMessage(message));
+  const ledgerEvents = character.value ? lifeLedgerForCharacter(character.value).events : [];
+  const ledgerEventById = new Map(ledgerEvents.map((event) => [event.id, event]));
+  const knownPartyNames = conversationUser.value
+    ? [getUserAiName(conversationUser.value), conversationUser.value.nickname]
+    : [];
+  const displayMessages = messages.filter((message) => {
+    if (message.contextOnly || message.gobangId || isVoomNarrationMessage(message) || isCallSubtitleMessage(message)) return false;
+    if (!message.coupleActivity) return true;
+    const resolvedEvents = message.coupleActivity.eventIds
+      .map((eventId) => ledgerEventById.get(eventId))
+      .filter((event): event is LifeLedgerEvent => Boolean(event));
+    return isGuardianVisibleAttachment(message.coupleActivity, resolvedEvents, knownPartyNames);
+  });
   return mergeVoomLikeMessages(displayMessages);
 });
 const onlineMessageEntries = computed<OnlineMessageEntry[]>(() => {
   const messages = allOnlineMessages.value;
   const timeLabels = messages.map((message, messageIndex) => {
+    if (message.coupleActivity) return '';
     const previousMessage = messages[messageIndex - 1];
     return shouldShowChatTimeDivider(message.createdAt, previousMessage?.createdAt)
       ? formatChatTimeDivider(message.createdAt)
@@ -2007,6 +2047,11 @@ async function requestReplyFromUserAvatar() {
     return;
   }
   await sendAndReply('');
+}
+
+function confirmCancelReply() {
+  if (currentConversationReplying.value) store.cancelConversationReply(props.id);
+  showCancelReplyConfirm.value = false;
 }
 
 async function sendStickerSuggestion(sticker: Sticker) {
@@ -3711,7 +3756,19 @@ function openTurnApiTrace(message: ChatMessage) {
 
 function openCoupleSpace() {
   showActionMenu.value = false;
-  void router.push({ name: 'couple-space', params: { id: props.id } });
+  showCoupleGuardian.value = true;
+}
+
+function openCoupleEventDetail(message: ChatMessage) {
+  const attachment = message.coupleActivity;
+  if (!attachment) return;
+  const ledger = character.value ? lifeLedgerForCharacter(character.value) : null;
+  const eventId = attachment.eventId ?? attachment.eventIds.at(-1);
+  const ledgerEvent = eventId ? ledger?.events.find((event) => event.id === eventId) : undefined;
+  selectedCoupleEvent.value = ledgerEvent
+    ? { ...guardianAttachmentFromEvent(ledgerEvent, attachment.snapshotId, guardianSnapshot.value), preview: attachment.preview }
+    : attachment;
+  showCoupleEventDetail.value = true;
 }
 
 function relationshipCommerceQuery(extra: Record<string, string> = {}) {
@@ -3857,7 +3914,7 @@ async function confirmClearHistory() {
     if (cleared) {
       quoteTarget.value = null;
       cancelSelection();
-      store.showConfigAlert('已清空该角色记忆，好友状态已回到初始。', '清空完成');
+      store.showConfigAlert('已清空该角色记忆与情侣守护历史，好友状态已回到初始。', '清空完成');
       await store.updateConversationMode(props.id, 'online');
       await router.replace({ name: 'chat-room', params: { id: props.id } });
       await scrollMessagesToBottom();
@@ -6142,8 +6199,20 @@ onBeforeUnmount(() => {
   gap: 3px;
   margin: 7px 0 7px 38px;
   padding: 8px 11px;
+  border: 0;
   border-radius: 15px;
   background: #ffffff;
+  cursor: pointer;
+  font: inherit;
+}
+
+.typing-indicator:focus-visible {
+  outline: 2px solid #5d8cf0;
+  outline-offset: 2px;
+}
+
+.typing-indicator:active {
+  transform: scale(0.96);
 }
 
 .typing-indicator span {

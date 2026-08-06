@@ -7,7 +7,7 @@
       <div class="top-title-copy">
         <strong>恋人守护</strong>
       </div>
-      <button class="top-action" type="button" :disabled="syncing || !state?.consentGrantedAt" :aria-label="`同步${characterName}状态`" @click="syncNow">
+      <button class="top-action" type="button" :disabled="syncing || !state?.consentGrantedAt || state.enabled === false" :aria-label="`同步${characterName}状态`" @click="syncNow">
         <LoaderCircle v-if="syncing" class="spin" :size="19" />
         <RefreshCw v-else :size="19" />
       </button>

@@ -314,6 +314,153 @@ export interface CoupleSpaceSnapshot {
   moments: CoupleMomentRecord[];
 }
 
+export interface CoupleLifeTimeWindow {
+  start: string;
+  end: string;
+}
+
+export interface CoupleLifeChargeWindow extends CoupleLifeTimeWindow {
+  place: string;
+  reason: string;
+}
+
+export interface CoupleLifePhoneSession extends CoupleLifeTimeWindow {
+  app: string;
+  purpose: string;
+}
+
+export interface CoupleLifeNetworkWindow extends CoupleLifeTimeWindow {
+  name: string;
+  kind: CoupleNetworkRecord['kind'];
+}
+
+export interface CoupleLifeDaySeed {
+  id: string;
+  dayKey: string;
+  generatedAt: number;
+  dayStartBattery: number;
+  chargeWindows: CoupleLifeChargeWindow[];
+  phoneSessions: CoupleLifePhoneSession[];
+  networkWindows: CoupleLifeNetworkWindow[];
+  snapshot: CoupleSpaceSnapshot;
+}
+
+export interface CoupleLifeDayRecord {
+  id: string;
+  conversationId: string;
+  characterId: string;
+  dayKey: string;
+  seed: CoupleLifeDaySeed;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CoupleLifeProjection {
+  generatedAt: number;
+  snapshot: CoupleSpaceSnapshot;
+  events: CoupleLifeEvent[];
+}
+
+export type CoupleLifeEventKind = 'charge' | 'screen' | 'app' | 'network' | 'location' | 'travel' | 'notification' | 'activity';
+
+export type CoupleLifeEventImportance = 'quiet' | 'notice' | 'highlight';
+
+export interface CoupleLifeEvent {
+  id: string;
+  occurredAt: number;
+  kind: CoupleLifeEventKind;
+  importance: CoupleLifeEventImportance;
+  title: string;
+  summary: string;
+  detail: string;
+  icon: string;
+  detailBlocks?: GuardianEventDetailBlock[];
+  battery?: number;
+  charging?: boolean;
+  app?: string;
+  location?: string;
+  activityCategory?: CoupleActivityCategory;
+}
+
+export interface GuardianEventDetailField {
+  label: string;
+  value: string;
+}
+
+export type GuardianEventDetailBlock =
+  | {
+    type: 'text';
+    label: string;
+    content: string;
+  }
+  | {
+    type: 'note';
+    folder: string;
+    title: string;
+    content: string;
+    updatedAt: string;
+    pinned: boolean;
+  }
+  | {
+    type: 'conversation';
+    contact: string;
+    relation: string;
+    summary: string;
+    messages: CouplePhoneChatMessage[];
+  }
+  | {
+    type: 'fields';
+    title: string;
+    fields: GuardianEventDetailField[];
+  };
+
+export type LifeLedgerEventSource = 'life-advance' | 'private-chat' | 'group-chat' | 'voom' | 'call' | 'system';
+
+export type LifeLedgerEventKind = CoupleLifeEventKind | 'message-received' | 'message-read' | 'message-sent' | 'voom-post' | 'call-state';
+
+export interface LifeLedgerEvent extends Omit<CoupleLifeEvent, 'kind'> {
+  kind: LifeLedgerEventKind;
+  source: LifeLedgerEventSource;
+  conversationId?: string;
+  messageId?: string;
+  surface?: 'online-chat' | 'group-chat' | 'voom' | 'call' | 'guardian';
+}
+
+export interface LifeLedger {
+  id: string;
+  characterId: string;
+  createdAt: number;
+  updatedAt: number;
+  lastAdvancedAt: number;
+  contentAdvanceCount: number;
+  current?: CoupleSpaceSnapshot;
+  events: LifeLedgerEvent[];
+}
+
+export type LifeLedgerAdvanceTrigger = 'time_passed' | 'location_change' | 'activity_change' | 'relationship_turn' | 'external_event' | 'device_change';
+
+export interface LifeLedgerAdvanceToolRequest {
+  reason: string;
+  trigger: LifeLedgerAdvanceTrigger;
+  contextHint: string;
+}
+
+export interface LifeLedgerAdvanceToolResult {
+  snapshot: CoupleSpaceSnapshot;
+  events: LifeLedgerEvent[];
+}
+
+export interface CoupleLifeState {
+  lastAdvancedAt: number;
+  lastConversationId?: string;
+  events: CoupleLifeEvent[];
+}
+
+export interface CoupleLifeUpdate {
+  snapshot: CoupleSpaceSnapshot;
+  events: CoupleLifeEvent[];
+}
+
 export interface CoupleWishNote {
   id: string;
   content: string;
@@ -325,9 +472,12 @@ export interface CoupleSpaceState {
   relationshipLabel: string;
   startedAt: string;
   arrivalReminderEnabled: boolean;
+  enabled: boolean;
+  activityFeedEnabled: boolean;
   snapshot?: CoupleSpaceSnapshot;
   history: CoupleSpaceSnapshot[];
   wishes: CoupleWishNote[];
+  life: CoupleLifeState;
 }
 
 export type FriendRelationshipStatus =
@@ -375,6 +525,7 @@ export interface CharacterProfile {
   themeStyleBindings?: CharacterThemeStyleBindings;
   mcpBinding?: CharacterMcpBinding;
   imageProfile?: CharacterImageProfile;
+  lifeLedger?: LifeLedger;
   coupleSpace?: CoupleSpaceState;
   relationship?: FriendRelationship;
 }
@@ -733,6 +884,27 @@ export interface ChatLocationAttachment {
   distance: string;
 }
 
+export interface ChatCoupleActivityAttachment {
+  snapshotId: string;
+  eventIds: string[];
+  eventId?: string;
+  occurredAt?: number;
+  kind?: LifeLedgerEventKind;
+  importance?: CoupleLifeEventImportance;
+  source?: LifeLedgerEventSource;
+  title: string;
+  summary: string;
+  detail?: string;
+  detailBlocks?: GuardianEventDetailBlock[];
+  icon?: string;
+  eventCount: number;
+  battery?: number;
+  charging?: boolean;
+  app?: string;
+  place?: string;
+  preview?: boolean;
+}
+
 export type ChatMcpResultItemKind = 'link' | 'product' | 'place' | 'media' | 'generic';
 
 export interface ChatMcpResultItem {
@@ -780,6 +952,7 @@ export interface ChatMcpOperation {
   requestedAt: number;
   completedAt?: number;
   receipt?: string;
+  hidden?: boolean;
 }
 
 export interface ChatMcpToolCallTrace {
@@ -791,6 +964,7 @@ export interface ChatMcpToolCallTrace {
   status: 'success' | 'error';
   state?: ChatMcpOperationState;
   result: string;
+  hidden?: boolean;
 }
 
 export interface ChatApiTrace {
@@ -953,6 +1127,7 @@ export interface ChatMessageQuote {
   image?: ChatImageAttachment;
   voice?: ChatVoiceAttachment;
   location?: ChatLocationAttachment;
+  coupleActivity?: ChatCoupleActivityAttachment;
   mcpResult?: ChatMcpResultAttachment;
   mcpOperations?: ChatMcpOperation[];
   transfer?: ChatTransferAttachment;
@@ -986,6 +1161,7 @@ export interface ChatMessage {
   image?: ChatImageAttachment;
   voice?: ChatVoiceAttachment;
   location?: ChatLocationAttachment;
+  coupleActivity?: ChatCoupleActivityAttachment;
   mcpResult?: ChatMcpResultAttachment;
   mcpOperations?: ChatMcpOperation[];
   transfer?: ChatTransferAttachment;
@@ -1358,7 +1534,6 @@ export interface WorldBookEntry {
   scope: WorldBookScope;
   enabled: boolean;
   coverImage: string;
-  includeInImageGeneration?: boolean;
 }
 
 export type ImageProviderType = 'openai' | 'novelai' | 'pollinations';
@@ -1929,4 +2104,5 @@ export interface GenerateReplyInput extends PromptContext {
   onReplyStreamText?: (content: string) => void;
   onMcpPrelude?: (prelude: { content: string; translation?: string }) => void | Promise<void>;
   onMcpOperation?: (operation: ChatMcpOperation) => void | Promise<void>;
+  lifeLedgerAdvanceTool?: (request: LifeLedgerAdvanceToolRequest) => Promise<LifeLedgerAdvanceToolResult>;
 }

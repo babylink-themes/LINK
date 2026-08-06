@@ -308,10 +308,10 @@
             <label class="field compact-field image-profile-row">
               <span>参考图用途</span>
               <select v-model="characterDraft.imageProfile.referenceImageMode" @change="saveCharacterDraft">
-                <option value="identity">身份参考：不向图像模型传完整原图</option>
-                <option value="composition">构图参考：允许图像模型读取原图</option>
+                <option value="identity">身份锁脸：传入原图，仅固定人物脸部</option>
+                <option value="composition">构图参考：传入原图并优先参考构图</option>
               </select>
-              <small>默认身份参考，使用文字外观档案保持一致性，避免复用姿势和衣服。</small>
+              <small>默认身份锁脸；人物入镜时会传入原图，并要求模型按场景生成新的姿势、衣服和构图。</small>
             </label>
             <label class="switch-card image-profile-row image-reference-toggle">
               <input v-model="characterDraft.imageProfile.voomPortraitModeEnabled" type="checkbox" @change="saveCharacterDraft" />
@@ -326,7 +326,7 @@
               <span class="switch-track"></span>
               <div>
                 <strong>启用参考图</strong>
-                <span>仅在选择“构图参考”且规划要求角色入镜时，才会向图像模型传入原图。</span>
+                <span>角色入镜时会向图像模型传入原图，以保持脸部身份一致。</span>
               </div>
             </label>
             <label class="switch-card image-profile-row image-reference-toggle">

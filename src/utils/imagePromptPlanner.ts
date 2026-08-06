@@ -111,7 +111,7 @@ export function buildImageVisualPlannerPrompt(input: ImageVisualPlanInput) {
     'You are a visual-intent director for an image-generation system.',
     'Interpret the complete Chinese request semantically. Never use keyword heuristics or a fixed scenario table.',
     'Decide whether a person is required, forbidden, or optional from the actual request. A character priority is only a soft preference and never overrides a scene-only request.',
-    'Use written character traits only when the character is required. Preserve identity through written traits, not through copying a reference image composition.',
+    'When a reference image is enabled, assume the image model will receive it to preserve facial identity. Use written character traits when the character is required, and use referencePolicy only to decide whether the reference composition should also influence the result.',
     'Treat prior moments with the same continuity key as continuity constraints for location and wardrobe. For a live video call, preserve the current place and outfit while letting pose, gaze, expression, and interaction respond to the latest dialogue.',
     'Create an original, concrete image prompt that follows the requested content. Respect wardrobe guidance and avoid lists without forcing a repetitive outfit.',
     'Return JSON only, with this exact schema:',
@@ -163,10 +163,20 @@ export function compileImageVisualPrompt(input: {
   const identityDetails = includeCharacter
     ? uniqueParts([profile?.appearancePrompt, profile?.facePrompt]).join(', ')
     : '';
+  const referenceImage = includeCharacter
+    && profile?.referenceImageEnabled !== false
+    ? normalizeText(profile?.referenceImage, 100000)
+    : '';
+  const referenceGuidance = referenceImage
+    ? profile?.referenceImageMode === 'composition'
+      ? 'Use the supplied reference image to preserve the same character and use its composition only as a flexible visual reference; follow the requested scene when changing pose, outfit, lighting, and setting.'
+      : 'Use the supplied reference image as a strict facial identity reference. Keep the same person and facial features, while creating the requested new pose, outfit, lighting, and composition.'
+    : '';
   const positivePrompt = uniqueParts([
     input.basePrompt,
     input.plan.visualPrompt,
     identityDetails ? `Character identity details: ${identityDetails}.` : '',
+    referenceGuidance,
     input.extraPrompt
   ]).join(', ');
   const negativePrompt = uniqueParts([
@@ -174,12 +184,6 @@ export function compileImageVisualPrompt(input: {
     input.plan.negativePrompt,
     input.plan.peoplePolicy === 'people-forbidden' ? 'no people, no human body parts, no faces, no reflections of people' : ''
   ]).join(', ');
-  const referenceImage = includeCharacter
-    && input.plan.referencePolicy === 'composition'
-    && profile?.referenceImageEnabled !== false
-    && profile?.referenceImageMode === 'composition'
-    ? normalizeText(profile?.referenceImage, 100000)
-    : '';
   const seed = includeCharacter && profile?.seedLockEnabled ? normalizeText(profile?.seed, 120) : '';
 
   return { positivePrompt, negativePrompt, referenceImage, seed };

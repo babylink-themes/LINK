@@ -16,6 +16,7 @@ function isGroupableMessage(message: ChatMessage) {
     && !message.image
     && !message.voice
     && !message.location
+    && !message.coupleActivity
     && !message.mcpResult
     && !message.mcpOperations?.length
     && !message.transfer

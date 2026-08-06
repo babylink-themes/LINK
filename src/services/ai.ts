@@ -1,5 +1,5 @@
 import { unzipSync } from 'fflate';
-import type { ApiVendor, AppSettings, CharacterProfile, ChatApiReasoningFormat, ChatApiTrace, ChatMcpOperation, ChatMcpOperationState, ChatMcpResultAttachment, ChatMcpToolCallTrace, ChatMessage, ConversationTimeAwarenessSettings, CoupleSpaceSnapshot, GenerateReplyInput, GroupDiscoveryCandidate, GroupMember, ImageProviderType, MusicComment, MusicTrack, NovelAiModelOption, PollinationsModelOption, PromptContext, SmallTheater, SmallTheaterTopic, UserProfile, VoomComment, VoomFrequency, VoomPost, WorldBookEntry } from '@/types/domain';
+import type { ApiVendor, AppSettings, CharacterProfile, ChatApiReasoningFormat, ChatApiTrace, ChatMcpOperation, ChatMcpOperationState, ChatMcpResultAttachment, ChatMcpToolCallTrace, ChatMessage, ConversationTimeAwarenessSettings, CoupleLifeUpdate, CoupleSpaceSnapshot, GenerateReplyInput, GroupDiscoveryCandidate, GroupMember, ImageProviderType, LifeLedgerAdvanceToolRequest, LifeLedgerEvent, MusicComment, MusicTrack, NovelAiModelOption, PollinationsModelOption, PromptContext, SmallTheater, SmallTheaterTopic, UserProfile, VoomComment, VoomFrequency, VoomPost, WorldBookEntry } from '@/types/domain';
 import { createId } from '@/utils/id';
 import { getCharacterAiName } from '@/utils/character';
 import { getUserAiName, getUserDisplayName, getUserVoomAuthorName } from '@/utils/profile';
@@ -10,9 +10,10 @@ import { parseModelJsonResponse } from '@/utils/aiResponse';
 import { getStickerDisplayImageUrl } from '@/utils/stickers';
 import { assertRenderableSmallTheaterHtml, getSmallTheaterVisibleText, withSmallTheaterRuntimeGuard } from '@/utils/smallTheaterHtml';
 import { formatUserTimePreview, renderTimeAwarenessPrompt } from '@/utils/timeAwareness';
+import { assertCompleteLifeLedgerEventPayload, normalizeLifeLedgerAdvancePayload } from '@/utils/lifeLedgerGeneratedOutput';
 import { formatContentWithChineseTranslation, normalizeTranslationText } from '@/utils/translation';
 import { getVoomFrequencyChance, stripVoomCommentReplyPrefix } from '@/utils/voom';
-import { normalizeCoupleSpaceSnapshot } from '@/utils/coupleSpace';
+import { normalizeCoupleLifeUpdate, normalizeCoupleSpaceSnapshot } from '@/utils/coupleSpace';
 import { extractThoughtChainContent } from '@/utils/thoughtChainThemes';
 import { isLocalMediaCacheUrl, resolveLocalMediaBlob } from '@/utils/mediaStorage';
 import { classifyTextApiHttpError, TextApiRequestError, type TextApiErrorClassification } from '@/utils/textApiErrors';
@@ -2778,7 +2779,7 @@ export async function fetchVendorModels(vendor: Pick<ApiVendor, 'apiUrl' | 'apiK
 
 export async function generateOpenAiImage(settings: AppSettings, overrides: ImageGenerationOverrides = {}): Promise<ImageGenerationResult> {
   const resolved = getResolvedOpenAiImageConfig(settings);
-  const positivePrompt = prependTabooWorldBookPrompt(overrides.positivePrompt ?? settings.imageOpenAi.positivePrompt, 'image');
+  const positivePrompt = overrides.positivePrompt ?? settings.imageOpenAi.positivePrompt;
   const negativePrompt = overrides.negativePrompt ?? settings.imageOpenAi.negativePrompt;
   const referenceImage = await prepareReferenceImage(overrides.referenceImage ?? '', 'image/png', resolved.apiKey);
   const prompt = sanitizePrompt(positivePrompt, negativePrompt);
@@ -2854,7 +2855,7 @@ export async function generateOpenAiImage(settings: AppSettings, overrides: Imag
 
 export async function generateNovelAiImage(settings: AppSettings, overrides: ImageGenerationOverrides = {}): Promise<ImageGenerationResult> {
   const config = settings.imageNovelAi;
-  const positivePrompt = prependTabooWorldBookPrompt(overrides.positivePrompt ?? config.positivePrompt, 'image');
+  const positivePrompt = overrides.positivePrompt ?? config.positivePrompt;
   const negativePrompt = overrides.negativePrompt ?? config.negativePrompt;
   const referenceImage = await prepareReferenceImage(overrides.referenceImage ?? '', 'image/png');
   const endpointBase = resolveNovelAiEndpointBase(settings);
@@ -2948,7 +2949,7 @@ export async function checkNovelAiImageAccess(settings: AppSettings): Promise<vo
 
 export async function generatePollinationsImage(settings: AppSettings, overrides: ImageGenerationOverrides = {}): Promise<ImageGenerationResult> {
   const config = settings.imagePollinations;
-  const positivePrompt = prependTabooWorldBookPrompt(overrides.positivePrompt ?? config.positivePrompt, 'image');
+  const positivePrompt = overrides.positivePrompt ?? config.positivePrompt;
   const negativePrompt = overrides.negativePrompt ?? config.negativePrompt;
   const referenceImage = overrides.referenceImage ?? config.referenceImage;
 
@@ -3259,8 +3260,14 @@ interface PlannedMcpToolCall {
   args: Record<string, unknown>;
 }
 
+interface PlannedLifeLedgerToolCall {
+  args: LifeLedgerAdvanceToolRequest;
+}
+
+type PlannedAgentToolCall = PlannedMcpToolCall | PlannedLifeLedgerToolCall;
+
 interface McpAgentTurn {
-  calls: PlannedMcpToolCall[];
+  calls: PlannedAgentToolCall[];
   replyPayload: string;
   apiResult: TextGenerationResult;
 }
@@ -3278,6 +3285,12 @@ interface CompletedMcpToolCall {
 const maxMcpPlannerSchemaLength = 2_400;
 const maxMcpReplyContextLength = 48_000;
 const sensitiveMcpTraceKeyPattern = /(?:authorization|cookie|password|passwd|secret|token|api.?key|credential)/i;
+const lifeLedgerToolServerId = 'builtin-life-ledger';
+const lifeLedgerToolName = 'life_ledger.advance';
+const lifeLedgerToolRef = `${lifeLedgerToolServerId}:${lifeLedgerToolName}`;
+const lifeLedgerAdvanceTriggers = new Set<LifeLedgerAdvanceToolRequest['trigger']>([
+  'time_passed', 'location_change', 'activity_change', 'relationship_turn', 'external_event', 'device_change'
+]);
 
 function sanitizeMcpTraceValue(value: unknown, depth = 0): unknown {
   if (depth > 6) return '[内容过深]';
@@ -3304,6 +3317,45 @@ function mcpPlannerToolCatalog(tools: ResolvedMcpTool[]) {
     description: tool.description,
     inputSchema: JSON.stringify(tool.inputSchema).slice(0, maxMcpPlannerSchemaLength)
   }));
+}
+
+function lifeLedgerPlannerToolCatalog(input: GenerateReplyInput, alreadyUsed = false) {
+  if (input.mode !== 'online' || !input.lifeLedgerAdvanceTool || alreadyUsed) return [];
+  return [{
+    toolRef: lifeLedgerToolRef,
+    serverId: lifeLedgerToolServerId,
+    serverName: '角色连续生活',
+    toolName: lifeLedgerToolName,
+    title: '推进连续生活账本',
+    description: '当前剧情只要自然出现用户尚未知晓、可延续到角色生活的变化，就优先调用：时间推移、起止活动、地点/设备状态变化、外部安排或关系进展均可。工具会生成并保存账本内容；不要自己编造账本事实。',
+    inputSchema: JSON.stringify({
+      type: 'object',
+      additionalProperties: false,
+      required: ['reason', 'trigger', 'contextHint'],
+      properties: {
+        reason: { type: 'string', description: '为什么本回合产生了值得持续记录的变化。' },
+        trigger: { type: 'string', enum: [...lifeLedgerAdvanceTriggers] },
+        contextHint: { type: 'string', description: '需要让连续生活延续的剧情线索；不得写成完整账本事件。' }
+      }
+    })
+  }];
+}
+
+function normalizeLifeLedgerPlannedCall(payload: unknown, input: GenerateReplyInput, allowed = true): PlannedLifeLedgerToolCall | null {
+  if (!allowed || !input.lifeLedgerAdvanceTool || !payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const call = payload as Record<string, unknown>;
+  const toolRef = String(call.toolRef ?? call.tool_ref ?? '').trim();
+  const serverId = String(call.serverId ?? call.server_id ?? '').trim();
+  const toolName = String(call.toolName ?? call.tool_name ?? call.name ?? '').trim();
+  if (toolRef !== lifeLedgerToolRef && !(serverId === lifeLedgerToolServerId && toolName === lifeLedgerToolName)) return null;
+  const rawArgs = call.arguments ?? call.args ?? call.input;
+  if (!rawArgs || typeof rawArgs !== 'object' || Array.isArray(rawArgs)) return null;
+  const args = rawArgs as Record<string, unknown>;
+  const reason = String(args.reason ?? '').trim().slice(0, 600);
+  const trigger = String(args.trigger ?? '').trim() as LifeLedgerAdvanceToolRequest['trigger'];
+  const contextHint = String(args.contextHint ?? args.context_hint ?? '').trim().slice(0, 2_000);
+  if (!reason || !contextHint || !lifeLedgerAdvanceTriggers.has(trigger)) return null;
+  return { args: { reason, trigger, contextHint } };
 }
 
 function normalizeMcpPlannedCalls(payload: unknown, tools: ResolvedMcpTool[], limit: number): PlannedMcpToolCall[] {
@@ -3334,6 +3386,25 @@ function normalizeMcpPlannedCalls(payload: unknown, tools: ResolvedMcpTool[], li
     calls.push({ resolvedTool: matchingTools[0], args });
   }
   return calls;
+}
+
+function normalizePlannedAgentCalls(payload: unknown, input: GenerateReplyInput, tools: ResolvedMcpTool[], limit: number, allowLifeLedger: boolean): PlannedAgentToolCall[] {
+  const record = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload as Record<string, unknown> : null;
+  const rawCalls = Array.isArray(payload)
+    ? payload
+    : Array.isArray(record?.calls)
+      ? record.calls
+      : Array.isArray(record?.toolCalls)
+        ? record.toolCalls
+        : [];
+  if (limit <= 0 || !rawCalls.length) return [];
+  const lifeLedgerCall = normalizeLifeLedgerPlannedCall(rawCalls[0], input, allowLifeLedger);
+  if (lifeLedgerCall) return [lifeLedgerCall];
+  return normalizeMcpPlannedCalls(payload, tools, limit);
+}
+
+function isPlannedLifeLedgerCall(call: PlannedAgentToolCall): call is PlannedLifeLedgerToolCall {
+  return !('resolvedTool' in call);
 }
 
 function mcpPreludeMessages(payload: string) {
@@ -3370,10 +3441,13 @@ function formatMcpAgentEvents(events: CompletedMcpToolCall[], sentPreludes: stri
 }
 
 async function generateMcpAgentTurn(input: GenerateReplyInput, basePrompt: string, tools: ResolvedMcpTool[], events: CompletedMcpToolCall[], sentPreludes: string[], remainingCalls: number, imageParts: TextApiContentPart[]): Promise<McpAgentTurn> {
+  const lifeLedgerAlreadyUsed = events.some((event) => event.toolRef === lifeLedgerToolRef);
   const plannerModeInstruction = input.mode === 'online'
     ? `当前是线上聊天。目录中的工具来自当前角色已绑定且启用的 MCP 服务；该角色可以直接调用服务内所有工具。
-角色必须基于人设、长期记忆、对话摘要、近期聊天和本轮氛围，自行决定不调用、调用哪些工具及其参数；不必等待用户明确提出工具请求。查询、读取、创建、修改、发送、发布和删除等操作均由角色根据上下文独立判断，工具调用后会真实执行。
-仅在工具结果会让角色下一步回应或行动更自然、具体且确有意义时调用。不要为了显得聪明而闲聊轮询、漫游检索、测试工具或重复同一查询。`
+角色必须把 MCP 当成自己真实拥有的能力，而不是只有用户点名后才能使用的外挂。每轮先主动扫描人设、长期记忆、对话摘要、近期聊天、本轮用户表达和当前现实时间：只要某个已绑定工具能让当前回应更具体、让角色正在做的事真正推进，或能及时取得用户正在关心的外部事实，就由角色自己发起调用，不要等待用户说“调用 MCP”“帮我查工具”或给出完整命令。
+优先主动发现这些机会：用户提到天气、时间、地点、路线、日程、提醒、快递、价格、商品、网页、音乐、平台消息、联系人、账号动态等可能变化或需要外部确认的内容；用户用“记得、顺便、回头、看看、发一下、安排一下、有没有、现在怎么样”等间接表达了现实任务；角色根据已知的人设、既定计划、当前对话或上一项工具结果确实有一件自然的现实行动要继续。低风险的查询、读取和状态检查，只要结果很可能改变或丰富本轮回复，可以直接做，不要先把“要不要我查一下”当成行动替代。
+写入、发送、发布、创建、修改或删除动作也可以主动执行，但必须有当前上下文明确支持的目标、对象、内容和时间；不能凭空补收件人、地点、日期、金额、隐私信息或重要意图。缺少会改变结果的关键参数时，先正常向用户询问，不要用猜测调用。涉及删除、对外发送、金钱或其他高影响后果时，只有用户意图或角色已经明确建立的计划足够清楚才执行。
+工具调用不是“有问才查”，也不是“每轮都查”。如果当前话题只是闲聊、没有现实信息缺口，工具结果不会改变下一步，或调用只是为了展示能力、碰运气、轮询、测试、漫游检索、重复同一查询，就不要调用。`
     : '当前是“用户触发调用”模式。只有用户在本轮或紧邻上下文中明确要求查询外部信息、读取已授权数据或执行某项真实操作时才调用；不要因为角色自行联想而主动调用。';
   const prompt = `${basePrompt}
 
@@ -3383,6 +3457,18 @@ async function generateMcpAgentTurn(input: GenerateReplyInput, basePrompt: strin
 调用策略：
 ${plannerModeInstruction}
 
+【可选连续生活工具】
+目录中若出现 life_ledger.advance，它是角色自己的连续生活记录能力，不是向用户展示的功能。在线上一对一聊天中，只要本回合或紧邻剧情自然出现用户尚未知晓或者可延续到角色生活的变化，就优先调用，不要因为变化不够戏剧化而过度保守：时间自然流逝、开始或结束一段活动、地点/交通变化、外部安排、设备状态变化、关系出现下一步，均是合理时机。它可以不调用，但应仅限于确实没有未知生活变化的纯寒暄或重复回复。
+用户已经知道的聊天内容、仅阅读或发送当前聊天消息，以及为了丰富剧情而虚构的事实，都绝不能调用。每个回复回合最多调用它一次。
+调用时只提交 reason、trigger 与 contextHint，不得伪造完整账本事件、地点、时间、状态或外部联系人内容。该工具会自行生成、严格校验并保存结果。调用 life_ledger.advance 时，messages 必须是 []，不得向用户提到账本、工具、系统、监控或“正在更新”。成功后只可依据工具实际返回的连续事实自然回复；失败后不得把未写入的内容说成既成事实。
+
+主动行动判断顺序：
+1. 先找当前对话里最值得推进的一个现实任务或信息缺口，再查看工具目录中是否有语义匹配的能力；不要只按工具名称关键词机械匹配。
+2. 如果存在低风险、可验证且与当前话题直接相关的工具，默认倾向先调用再回复；不要把本来可以完成的查询改成泛泛猜测、反问用户或承诺“之后再看”。
+3. 如果角色已经说出“我去查、我看看、我帮你记、我去确认、我发给他/她”等行动意图，除非缺少关键参数或权限不足，必须把它落实为对应的真实工具调用；不能只说不做。
+4. 工具返回后，把结果当作角色刚刚亲自获得的新事实：先检查结果是否成功、是否需要补充动作、是否已经满足原任务，再决定继续调用还是自然收束。不要停在“正在处理”，也不要把失败说成成功。
+5. 没有用户明示但角色确实想做的主动行动，必须能从角色设定、既定计划、已知社交关系、当前时间或已发生的工具结果中找到依据；主动性来自角色的生活和判断，不来自凭空制造任务。
+
 本轮当前现实时间（以此为唯一“现在”，不要使用历史消息时间推断日期）：
 ${formatUserTimePreview(new Date(input.timeAwarenessNow ?? Date.now()))}
 
@@ -3390,10 +3476,10 @@ ${formatUserTimePreview(new Date(input.timeAwarenessNow ?? Date.now()))}
 ${formatMcpAgentEvents(events, sentPreludes)}
 
 当前角色可用的完整工具目录：
-${JSON.stringify(mcpPlannerToolCatalog(tools), null, 2)}
+${JSON.stringify([...lifeLedgerPlannerToolCatalog(input, lifeLedgerAlreadyUsed), ...mcpPlannerToolCatalog(tools)], null, 2)}
 
 规则：
-1. 只有查询外部实时信息或执行真实外部动作确有帮助时才调用；不需要工具时返回空数组。
+1. 每轮都要完成一次主动机会扫描：能明显提升当前回复真实性、具体性或行动完成度的低风险工具，优先主动调用；确实没有合适机会时才返回空数组。
 2. toolRef、serverId 与 toolName 必须从目录逐字选择，arguments 必须符合 inputSchema；不得编造工具或参数。
 3. 还可以执行 ${remainingCalls} 次工具调用。每次只返回 0 或 1 个调用，便于先读取上一步真实结果再继续行动。
 4. 创建日程、提醒或闹钟时，所有 ISO 8601 时间必须相对于上面的当前现实时间，不能使用历史聊天里的旧日期；开始时间早于当前时间时不要调用写入工具。
@@ -3408,7 +3494,7 @@ ${JSON.stringify(mcpPlannerToolCatalog(tools), null, 2)}
   });
   const parsed = parseModelJsonResponse(apiResult.text);
   return {
-    calls: normalizeMcpPlannedCalls(parsed, tools, remainingCalls > 0 ? 1 : 0),
+    calls: normalizePlannedAgentCalls(parsed, input, tools, remainingCalls > 0 ? 1 : 0, !lifeLedgerAlreadyUsed),
     replyPayload: normalizeRoleplayReplyPayload(apiResult.text, input),
     apiResult
   };
@@ -3477,7 +3563,7 @@ function toChatMcpOperation(operationId: string, serverId: string, serverName: s
 
 async function collectMcpReplyContext(input: GenerateReplyInput, basePrompt: string, imageParts: TextApiContentPart[]) {
   const tools = resolveMcpTools(input.settings, input.character);
-  if (!tools.length) return { context: '', structuredResults: [] as ChatMcpResultAttachment[], toolCalls: [] as ChatMcpToolCallTrace[], operations: [] as ChatMcpOperation[], finalReplyPayload: '', finalApiResult: undefined as TextGenerationResult | undefined };
+  if (!tools.length && !input.lifeLedgerAdvanceTool) return { context: '', structuredResults: [] as ChatMcpResultAttachment[], toolCalls: [] as ChatMcpToolCallTrace[], operations: [] as ChatMcpOperation[], finalReplyPayload: '', finalApiResult: undefined as TextGenerationResult | undefined };
   const maxCalls = Math.max(1, Math.min(6, input.settings?.mcpSettings.maxToolCallsPerReply ?? 2));
   const completedCalls: CompletedMcpToolCall[] = [];
   const structuredResults: ChatMcpResultAttachment[] = [];
@@ -3507,6 +3593,48 @@ async function collectMcpReplyContext(input: GenerateReplyInput, basePrompt: str
       finalReplyPayload = agentTurn.replyPayload;
       finalApiResult = agentTurn.apiResult;
       break;
+    }
+    if (isPlannedLifeLedgerCall(plannedCall)) {
+      const requestedAt = Date.now();
+      const operationId = createId('life-ledger');
+      try {
+        const result = await input.lifeLedgerAdvanceTool!(plannedCall.args);
+        const completedAt = Date.now();
+        const content = JSON.stringify({
+          saved: true,
+          eventCount: result.events.length,
+          current: {
+            location: result.snapshot.location.place,
+            status: result.snapshot.location.status,
+            battery: result.snapshot.device.battery,
+            charging: result.snapshot.device.charging,
+            screenStatus: result.snapshot.device.screenStatus,
+            activeApp: result.snapshot.device.activeApp
+          },
+          events: result.events.map((event) => ({
+            occurredAt: event.occurredAt,
+            kind: event.kind,
+            title: event.title,
+            summary: event.summary
+          }))
+        });
+        const operation = {
+          ...toChatMcpOperation(operationId, lifeLedgerToolServerId, '角色连续生活', lifeLedgerToolName, { ...plannedCall.args }, content, 'completed', requestedAt, completedAt),
+          hidden: true
+        } satisfies ChatMcpOperation;
+        completedCalls.push({ operationId, serverName: operation.serverName, toolName: operation.toolName, toolRef: operation.toolRef, status: 'completed', content });
+        toolCalls.push({ operationId, serverId: operation.serverId, serverName: operation.serverName, toolName: operation.toolName, arguments: operation.arguments, status: 'success', state: 'completed', result: content, hidden: true });
+      } catch (error) {
+        const completedAt = Date.now();
+        const content = error instanceof Error ? error.message : 'LifeLedger 工具调用失败。';
+        const operation = {
+          ...toChatMcpOperation(operationId, lifeLedgerToolServerId, '角色连续生活', lifeLedgerToolName, { ...plannedCall.args }, content, 'failed', requestedAt, completedAt),
+          hidden: true
+        } satisfies ChatMcpOperation;
+        completedCalls.push({ operationId, serverName: operation.serverName, toolName: operation.toolName, toolRef: operation.toolRef, status: 'failed', content });
+        toolCalls.push({ operationId, serverId: operation.serverId, serverName: operation.serverName, toolName: operation.toolName, arguments: operation.arguments, status: 'error', state: 'failed', result: content, hidden: true });
+      }
+      continue;
     }
     const preludes = mcpPreludeMessages(agentTurn.replyPayload);
     for (const prelude of preludes) {
@@ -3800,6 +3928,77 @@ export async function generateCoupleSpaceSnapshot(input: {
   if (!apiReply.trim()) throw new Error('情侣空间模型没有返回状态内容。');
   const parsed = JSON.parse(extractJsonContent(apiReply)) as unknown;
   return normalizeCoupleSpaceSnapshot(parsed, Date.now());
+}
+
+function buildLifeLedgerAdvancePrompt(input: {
+  context: PromptContext;
+  previousSnapshot?: CoupleSpaceSnapshot;
+  previousEvents: LifeLedgerEvent[];
+  lastAdvancedAt: number;
+  advanceInstruction?: LifeLedgerAdvanceToolRequest;
+}) {
+  const characterName = getCharacterAiName(input.context.character);
+  const userName = getUserAiName(input.context.boundUser ?? input.context.user);
+  const now = Date.now();
+  const previousSnapshot = input.previousSnapshot
+    ? `上一次状态摘要：\n${JSON.stringify({
+      location: input.previousSnapshot.location,
+      device: {
+        battery: input.previousSnapshot.device.battery,
+        charging: input.previousSnapshot.device.charging,
+        screenStatus: input.previousSnapshot.device.screenStatus,
+        activeApp: input.previousSnapshot.device.activeApp,
+        network: input.previousSnapshot.device.network
+      },
+      bond: {
+        mood: input.previousSnapshot.bond.mood,
+        moodEmoji: input.previousSnapshot.bond.moodEmoji,
+        nextPlan: input.previousSnapshot.bond.nextPlan
+      }
+    })}`
+    : '这是第一次建立手机镜像，还没有前序状态。';
+  const recentEvents = input.previousEvents
+    .filter((event) => event.occurredAt >= now - 24 * 60 * 60 * 1000 && event.occurredAt <= now)
+    .slice(-12);
+  const advancedFrom = new Date(now - 24 * 60 * 60 * 1000).toLocaleString('zh-CN', { hour12: false });
+  const advancedTo = new Date(now).toLocaleString('zh-CN', { hour12: false });
+  return [
+    buildPrompt(input.context, { includeAvailableStickers: false }),
+    `现在推进 ${characterName} 的唯一 LifeLedger。它只保存 ${userName} 尚未从当前私聊、${userName} 所在群聊、VOOM、通话、消息送达或已读状态中得知的角色生活事实。${userName} 看到的情侣守护只是这条历史的授权镜像，绝不能另起一份生活、记录任何已知表面，或把旧事实改写。`,
+    `读取与推进窗口固定为最近 24 小时：从 ${advancedFrom} 到 ${advancedTo}。只写窗口内确实发生的新变化；前序事件是不可改写的既成事实。真实经过很短时可以只产生少量变化。`,
+    input.advanceInstruction
+      ? `本次是角色依据当前剧情主动选择的账本推进。触发类型：${input.advanceInstruction.trigger}；选择原因：${input.advanceInstruction.reason}；需延续的剧情线索：${input.advanceInstruction.contextHint}。这只是推进线索，不是现成事实：仍须以角色设定、已有账本与聊天上下文为准，不得把用户当前消息、用户所在群聊、VOOM、通话、已读或刚刚发出的回复重写成新的未知生活事件。`
+      : '',
+    previousSnapshot,
+    recentEvents.length ? `最近已确认生活事件（这些是既成事实，必须延续）：\n${JSON.stringify(recentEvents)}` : '',
+    `输出目标是可靠的账本增量，而不是完整复制一台手机：
+  1. events 是必填字段，绝不能省略、写成 null 或空数组。只写最近 24 小时内真正新增的 1–6 个状态事件。每条必须有 offsetMinutes（-1440 到 0）、kind、importance、title、summary、detail、icon；detail 至少写出一句与摘要不同的具体经过。detailBlocks 可选，提供时必须是可读的 text、note、conversation 或 fields，禁止空字段。
+  2. 如果没有适合回填的过去片段，也必须把 snapshot 中用户尚未得知的“角色此刻状态”写成 1 条 events：例如此刻所在地点、正在进行的事、设备状态或下一步安排。snapshot 不能替代 events。
+  3. snapshot 是推进后的当前状态，不是独立的守护故事。更新当前地点、状态与必要的手机生活内容即可；各数组按实际需要返回 0–4 条，绝不为了填满结构虚构内容。location.route 会由本地从账本地点事件归并。
+  4. 当前私聊、${userName} 所在群聊、VOOM、通话、消息收发与已读都是用户已经知道的表面，绝不能出现在 snapshot 或 events 中，也不能以“后果”改写成生活事实。外部联系人内容仅限用户未参与、未看见且独立具体的角色生活事实。
+  5. 不要声称读取真实 GPS、真实设备权限或真实联系人；这里的真实仅指角色世界内连续发生的生活。不要创建背叛、违法或极端冲突来增加趣味。`,
+    `只输出合法 JSON，不要 Markdown 或解释。结构必须是：
+{"snapshot":{"location":{"place":"当前地点","address":"场景描述","status":"正在做什么","distance":"与${userName}的距离","transport":"交通方式","eta":"下一步","stayMinutes":35},"device":{"battery":76,"charging":false,"screenStatus":"using|locked|idle","activeApp":"应用或用途","network":"当前网络"},"bond":{"mood":"心情短语","moodEmoji":"emoji","missLevel":82,"syncScore":91,"nextPlan":"下一件想一起做的事","whisper":"角色口吻悄悄话","daySummary":"这段生活的连贯总结","hiddenThought":"没发给对方的话","keywords":["关键词1","关键词2"]},"moments":[]},"events":[{"offsetMinutes":-35,"kind":"charge|screen|app|network|location|travel|notification|activity","importance":"quiet|notice|highlight","title":"简短状态标题","summary":"时间线摘要","detail":"展开查看的具体经过","icon":"emoji","battery":60,"charging":false,"app":"可选 App","location":"可选地点"}]}`
+  ].filter(Boolean).join('\n\n');
+}
+
+export async function generateLifeLedgerAdvance(input: {
+  context: PromptContext;
+  previousSnapshot?: CoupleSpaceSnapshot;
+  previousEvents: LifeLedgerEvent[];
+  lastAdvancedAt: number;
+  advanceInstruction?: LifeLedgerAdvanceToolRequest;
+  settings?: AppSettings;
+  modelOverride?: string;
+}): Promise<CoupleLifeUpdate> {
+  requireTextGenerationConfig(input.settings, input.modelOverride, '情侣守护生活推进');
+  const generatedAt = Date.now();
+  const apiReply = await callTextApi(input.settings, buildLifeLedgerAdvancePrompt(input), input.modelOverride);
+  if (!apiReply.trim()) throw new Error('情侣守护模型没有返回生活状态。');
+  const parsed = JSON.parse(extractJsonContent(apiReply)) as unknown;
+  const normalizedPayload = normalizeLifeLedgerAdvancePayload(parsed);
+  assertCompleteLifeLedgerEventPayload(normalizedPayload);
+  return normalizeCoupleLifeUpdate(normalizedPayload, generatedAt);
 }
 
 function buildSmallTheaterPrompt(input: { context: PromptContext; topic: SmallTheaterTopic; recentTheaters?: SmallTheater[] }) {
@@ -4538,6 +4737,7 @@ export async function generateGroupChatReply(input: {
   mode?: 'online' | 'offline';
   settings?: AppSettings;
   modelOverride?: string;
+  signal?: AbortSignal;
 }): Promise<GroupChatReplyResult> {
   requireTextGenerationConfig(input.settings, input.modelOverride, '群聊回复');
   const canonicalUserName = getUserAiName(input.user);
@@ -4609,7 +4809,7 @@ ${stickerList || '无'}
 7. 群内出现匿名小号消息时，不得推断、暗示或泄露它与当前用户的真实身份关系。
 8. 图片与语音是群内所有当前成员共同可见的真实消息：真实图片已随请求附带时可直接识图；文字描述卡片要理解为用户发送了描述所表达的图片；语音条要理解为发送者用语音说出了转写内容。引用消息必须结合被引用内容理解，不能当成孤立文本。
 9. 只输出 JSON：{"messages":[{"authorMemberId":"成员id","type":"text|voice|image|sticker","content":"正文或描述","stickerId":"可选","quoteMessageId":"可选，仅线上引用的历史消息id"}],"privateInitiations":[{"characterId":"已有角色ID","reason":"为什么此刻要私聊用户"}],"membershipDecision":"approve|reject|null"}`;
-  const apiReply = await callTextApi(input.settings, prompt, input.modelOverride, await getPreparedVisualImageParts(input));
+  const apiReply = await callTextApi(input.settings, prompt, input.modelOverride, await getPreparedVisualImageParts(input), { signal: input.signal });
   const parsed = JSON.parse(extractJsonContent(apiReply)) as Record<string, unknown>;
   const rawMessages = Array.isArray(parsed.messages) ? parsed.messages : [];
   const allowedMembers = new Map(input.members.filter((member) => member.identityType !== 'user' && (member.membershipStatus ?? 'active') === 'active').map((member) => [member.id, member]));

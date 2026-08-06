@@ -26,6 +26,7 @@
     "test:link-preview": "tsx --tsconfig tsconfig.app.json scripts/link-preview-regression.ts",
     "test:mobile-runtime": "tsx --tsconfig tsconfig.app.json scripts/mobile-runtime-regression.ts",
     "test:message-pagination": "tsx --tsconfig tsconfig.app.json scripts/message-pagination-regression.ts",
+    "test:life-ledger": "tsx --tsconfig tsconfig.app.json scripts/life-ledger-regression.ts",
     "test:fanfic-chapter": "tsx --tsconfig tsconfig.app.json scripts/fanfic-chapter-regression.ts",
     "test:theme-styles": "tsx --tsconfig tsconfig.app.json scripts/theme-styles-regression.ts",
     "test:role-operations": "tsx --tsconfig tsconfig.app.json scripts/role-operations-regression.ts",

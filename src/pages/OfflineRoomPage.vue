@@ -135,10 +135,10 @@
           {{ loadingLaterFloors ? '正在加载后续楼层' : `下滑加载后续楼层 · 还有 ${laterFloorCount} 层` }}
         </button>
 
-        <section v-if="currentConversationReplying && !hasLaterFloors" class="typing-card" aria-live="polite">
+        <button v-if="currentConversationReplying && !hasLaterFloors" class="typing-card" type="button" aria-label="取消当前回复" title="点击取消当前回复" @click="showCancelReplyConfirm = true">
           <span class="typing-dots"><i></i><i></i><i></i></span>
           <strong>{{ characterDisplayName }} 正在回复中</strong>
-        </section>
+        </button>
 
         <section v-if="!chapterFloors.length && !currentConversationReplying" class="offline-empty">
           <BookOpenText :size="32" />
@@ -237,6 +237,18 @@
       </form>
     </div>
 
+    <div v-if="showCancelReplyConfirm" class="delete-confirm-backdrop" role="dialog" aria-modal="true" aria-label="取消回复" @click.self="showCancelReplyConfirm = false">
+      <section class="delete-confirm-sheet">
+        <span>回复取消</span>
+        <h2>取消这次回复？</h2>
+        <p>将停止本次 API 回复；已经显示的章节会保留。</p>
+        <div class="delete-confirm-actions">
+          <button type="button" @click="showCancelReplyConfirm = false">继续等待</button>
+          <button type="button" @click="confirmCancelReply">确认取消</button>
+        </div>
+      </section>
+    </div>
+
     <div v-if="pendingDelete" class="delete-confirm-backdrop" role="dialog" aria-modal="true" @click.self="cancelPendingDelete">
       <section class="delete-confirm-sheet">
         <span>删除确认</span>
@@ -297,6 +309,7 @@ const showOfflineToolbar = ref(false);
 const truncateDeleteMode = ref(false);
 const showJumpDialog = ref(false);
 const showRegeneratePromptDialog = ref(false);
+const showCancelReplyConfirm = ref(false);
 const jumpFloorDraft = ref('1');
 const regeneratePromptDraft = ref('');
 const showMemoryPanel = ref(false);
@@ -1122,6 +1135,11 @@ async function continueOfflineChapter() {
   await jumpToLatestCharacterFloor(previousCharacterFloorId);
 }
 
+function confirmCancelReply() {
+  if (currentConversationReplying.value) store.cancelConversationReply(props.id);
+  showCancelReplyConfirm.value = false;
+}
+
 async function regenerateLatestReply(replyInstruction?: string) {
   if (!canRegenerate.value) return;
   const previousCharacterFloorId = latestCharacterFloor()?.id ?? '';
@@ -1634,13 +1652,26 @@ async function exitOffline() {
   display: flex;
   align-items: center;
   gap: 10px;
+  width: 100%;
   min-height: 54px;
   padding: 13px 15px;
   border: 1px solid rgba(255, 255, 255, 0.72);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.7);
   color: #695d65;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
   box-shadow: 0 14px 34px rgba(96, 74, 88, 0.08);
+}
+
+.typing-card:focus-visible {
+  outline: 2px solid #a64d5b;
+  outline-offset: 2px;
+}
+
+.typing-card:active {
+  transform: scale(0.99);
 }
 
 .typing-card strong {

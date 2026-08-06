@@ -11,7 +11,7 @@ import type {
   WorldBookEntry
 } from '@/types/domain';
 import { createId } from '@/utils/id';
-import { defaultFanficStoryBible, getFanficTextModelOverride, serializeFanficLocalWorldBooks } from '@/utils/fanfic';
+import { defaultFanficStoryBible, getFanficTextModelOverride, replaceFanficIdentityTokens, serializeFanficLocalWorldBooks } from '@/utils/fanfic';
 import { describeGeneratedFanficChapterIssues, generatedFanficChapterPayloadIsComplete, normalizeGeneratedFanficChapterPayload } from '@/utils/fanficChapter';
 import { parseFanficJsonResponse } from '@/utils/fanficJson';
 import { getSelectedImageModelOption } from '@/utils/settings';
@@ -66,17 +66,19 @@ async function requestFanficJson(
   options: TextGenerationOptions,
   validate: (value: unknown) => boolean = () => true,
   invalidStructureMessage: string | ((value: unknown) => string) = '文本模型返回的 JSON 缺少必要字段。',
-  maxAttempts = 2
+  maxAttempts = 2,
+  identity?: { userName: string; characterName: string }
 ) {
   const modelOverride = getFanficTextModelOverride(settings);
   if (!hasSelectedTextGenerationConfig(settings, modelOverride)) {
     throw new Error('请先在模型切换中配置全局内容创作模型，再生成同人文内容。');
   }
+  const resolvedPrompt = identity ? replaceFanficIdentityTokens(prompt, identity) : prompt;
   let lastError: unknown;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const attemptPrompt = attempt === 0
-      ? prompt
-      : `${prompt}\n\n重要重试要求：上一次响应不是可解析的完整 JSON。请从头重新生成全部字段，使用紧凑 JSON，不要 Markdown 代码块，不要解释，不要省略结尾的引号、数组或花括号。`;
+      ? resolvedPrompt
+      : `${resolvedPrompt}\n\n重要重试要求：上一次响应不是可解析的完整 JSON。请从头重新生成全部字段，使用紧凑 JSON，不要 Markdown 代码块，不要解释，不要省略结尾的引号、数组或花括号。`;
     const reply = await requestTextGeneration(settings, attemptPrompt, modelOverride, {
       ...options,
       jsonMode: true,
@@ -233,7 +235,9 @@ export async function generateFanficBookPlan(input: {
     foundationPrompt,
     { temperature: 0.76, maxTokens: 3600 },
     planFoundationIsComplete,
-    '同人文基础设定缺少必要字段。'
+    '同人文基础设定缺少必要字段。',
+    2,
+    { userName: input.userName, characterName: input.characterName }
   );
   if (!isRecord(parsedFoundation) || !planFoundationIsComplete(parsedFoundation)) throw new Error('同人文基础设定缺少模型生成的完整字段。');
   const title = asString(parsedFoundation.title);
@@ -471,7 +475,9 @@ export async function generateFanficChapter(input: {
     (value) => {
       const issues = describeGeneratedFanficChapterIssues(value);
       return `章节 JSON 没有可展示的${issues.join('、') || '正文'}。`;
-    }
+    },
+    2,
+    { userName: input.user.name, characterName: input.character.name }
   );
   const chapter = normalizeFanficChapter(parsed, {
     book: input.book,
@@ -551,7 +557,8 @@ export async function generateFanficHotspotComments(input: {
     { temperature: 0.86, maxTokens: 3200 },
     (value) => isRecord(value) && generatedCommentCollectionIsUsable(value.comments),
     '这个高潮点的评论 JSON 没有可用评论。',
-    1
+    1,
+    { userName: input.book.userName, characterName: input.book.characterName }
   );
   if (!isRecord(parsed)) throw new Error('这个高潮点的评论生成结果无效。');
   const comments = normalizeGeneratedHotspotComments(parsed.comments, {

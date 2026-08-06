@@ -49,7 +49,7 @@
           </template>
         </div>
       </div>
-      <div v-if="replying" class="typing-indicator"><span></span><span></span><span></span></div>
+      <button v-if="replying" class="typing-indicator" type="button" aria-label="取消当前回复" title="点击取消当前回复" @click="showCancelReplyConfirm = true"><span></span><span></span><span></span></button>
       </main>
 
     <section v-if="selectionMode" class="selection-toolbar">
@@ -102,6 +102,17 @@
         <button type="button" @click="openInvitePanel">邀请群成员</button>
         <button type="button" @click="openLeaveGroup">退出群聊</button>
         <button class="danger" type="button" @click="openDeleteGroup">删除群聊</button>
+      </section>
+    </AppModal>
+
+    <AppModal v-model="showCancelReplyConfirm" title="取消回复" :show-header="false" variant="ins">
+      <section class="delete-confirm-sheet">
+        <h3>取消这次回复？</h3>
+        <p>将停止本次 API 回复；已经显示的消息会保留。</p>
+        <div class="delete-confirm-actions">
+          <button class="secondary-action" type="button" @click="showCancelReplyConfirm = false">继续等待</button>
+          <button class="danger-action" type="button" @click="confirmCancelReply">确认取消</button>
+        </div>
       </section>
     </AppModal>
 
@@ -247,6 +258,7 @@ const showModelSwitch = ref(false);
 const showMessageActions = ref(false);
 const showEditModal = ref(false);
 const showDeleteMessagesConfirm = ref(false);
+const showCancelReplyConfirm = ref(false);
 const showImagePanel = ref(false);
 const showVoicePanel = ref(false);
 const showRegenerate = ref(false);
@@ -439,6 +451,7 @@ watch([
 ], syncGroupTransientOperations, { immediate: true });
 
 async function confirmRegenerate() { showRegenerate.value = false; await store.regenerateLatestGroupReply(props.id, regenerateInstruction.value); await scrollToBottom(); }
+function confirmCancelReply() { if (replying.value) store.cancelConversationReply(props.id); showCancelReplyConfirm.value = false; }
 async function confirmDeleteGroup() { const deleted = await store.deleteGroupConversation(props.id); if (deleted) await router.replace({ name: 'home' }); }
 async function confirmLeaveGroup() { const left = await store.leaveGroupConversation(props.id); if (left) { showLeaveConfirm.value = false; quoteTarget.value = null; } }
 async function applyToRejoin() { await store.applyToRejoinGroup(props.id); await scrollToBottom(); }
@@ -504,9 +517,10 @@ onBeforeUnmount(() => {
 .group-chat-page :deep(.composer) { transform:translate3d(0,calc(0px - var(--keyboard-inset)),0) }
 .message-time-divider { display:flex;justify-content:center;margin:12px 0 8px;pointer-events:none }
 .message-time-divider time { max-width:calc(100% - 32px);padding:3px 8px;border-radius:999px;background:rgba(245,246,248,.82);color:#7b828a;font-size:11px;font-weight:680;line-height:1.2;box-shadow:0 1px 6px rgba(17,20,24,.06);backdrop-filter:blur(12px) }
-.typing-indicator { display:inline-flex;align-items:center;gap:3px;margin:7px 0 7px 38px;padding:8px 11px;border-radius:15px;background:#fff }
+.typing-indicator { display:inline-flex;align-items:center;gap:3px;margin:7px 0 7px 38px;padding:8px 11px;border:0;border-radius:15px;background:#fff;cursor:pointer;font:inherit }
 .typing-indicator span { width:5px;height:5px;border-radius:50%;background:#9da1a6;animation:typing .9s infinite ease-in-out }
 .typing-indicator span:nth-child(2) { animation-delay:.12s }.typing-indicator span:nth-child(3) { animation-delay:.24s }
+.typing-indicator:focus-visible { outline:2px solid #5d8cf0;outline-offset:2px }.typing-indicator:active { transform:scale(.96) }
 .hidden-file-input { position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap }
 .image-send-panel,.voice-send-panel { display:grid;gap:12px;width:100%;min-width:0;container-type:inline-size }
 .image-panel-head,.voice-panel-head { display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0 }

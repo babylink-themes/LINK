@@ -29,9 +29,10 @@ const identityPlan = normalizeImageVisualPlan({
   negativePrompt: 'studio pose'
 }, fallback);
 const identityPrompt = compileImageVisualPrompt({ plan: identityPlan, profile });
-assert.equal(identityPrompt.referenceImage, '');
+assert.equal(identityPrompt.referenceImage, profile.referenceImage);
 assert.equal(identityPrompt.seed, '');
 assert.match(identityPrompt.positivePrompt, /short black hair/);
+assert.match(identityPrompt.positivePrompt, /strict facial identity reference/);
 
 const compositionPlan = normalizeImageVisualPlan({
   peoplePolicy: 'character-required',
@@ -45,6 +46,7 @@ const compositionPrompt = compileImageVisualPrompt({
 });
 assert.equal(compositionPrompt.referenceImage, profile.referenceImage);
 assert.equal(compositionPrompt.seed, profile.seed);
+assert.match(compositionPrompt.positivePrompt, /composition only as a flexible visual reference/);
 
 const noPeoplePlan = normalizeImageVisualPlan({
   peoplePolicy: 'people-forbidden',

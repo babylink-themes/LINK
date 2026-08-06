@@ -74,7 +74,11 @@ export const defaultThoughtChainCode = `<style>
   align-content: start;
   gap: 10px;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
   color: #4e5c51;
   font-size: 13px;
   line-height: 1.8;
@@ -102,7 +106,11 @@ export const defaultThoughtChainCode = `<style>
   align-content: start;
   gap: 8px;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
 }
 
 .thought-chain-tool {
