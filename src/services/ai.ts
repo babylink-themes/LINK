@@ -3485,6 +3485,9 @@ function toChatMcpOperation(operationId: string, serverId: string, serverName: s
 }
 
 async function collectMcpReplyContext(input: GenerateReplyInput, basePrompt: string, imageParts: TextApiContentPart[]) {
+  if (input.mode !== 'online') {
+    return { context: '', structuredResults: [] as ChatMcpResultAttachment[], toolCalls: [] as ChatMcpToolCallTrace[], operations: [] as ChatMcpOperation[], finalReplyPayload: '', finalApiResult: undefined as TextGenerationResult | undefined };
+  }
   const tools = resolveMcpTools(input.settings, input.character);
   if (!tools.length) return { context: '', structuredResults: [] as ChatMcpResultAttachment[], toolCalls: [] as ChatMcpToolCallTrace[], operations: [] as ChatMcpOperation[], finalReplyPayload: '', finalApiResult: undefined as TextGenerationResult | undefined };
   const maxCalls = Math.max(1, Math.min(6, input.settings?.mcpSettings.maxToolCallsPerReply ?? 2));

@@ -1,5 +1,6 @@
 import type { ChatMode, ConversationOfflineSettings, ConversationRoleGuidanceSettings, OfflinePromptPreset, OfflineStructureKind, PromptContext, WorldBookEntry, WorldBookLoreEntry } from '@/types/domain';
 import { offlineGuidancePrompts } from '@/data/offlineGuidance';
+import { onlineCallResponsePrompt, onlineCoreRoleplayPrompt, onlineGobangResponsePrompt, onlineInputSemanticsPrompt, onlineNarrationPrompt, onlinePendingMusicInvitePrompt, onlinePendingTransferPrompt, onlinePunctuationPrompt, onlineRelationshipEventPrompt, onlineReplyProtocolPrompt, onlineRoleGuidancePrompts, onlineRoutineCarePrompt, onlineStickerPrompt } from '@/data/onlinePrompts';
 import { normalizeTimeAwarenessSettings, renderTimeAwarenessPrompt } from '@/utils/timeAwareness';
 import { activeOfflineTonePreset, activeOfflineWritingStylePreset, defaultOfflineSettings, normalizeOfflineSettings, normalizeRoleGuidanceSettings } from '@/utils/memory';
 import { getCurrentUserTurnMessages } from '@/utils/messageTurns';
@@ -743,16 +744,19 @@ function renderOfflineLengthInstruction(enabled: boolean, wordCount: string) {
 5. 当本轮核心事件已经获得回应并来到新的用户选择点时停止，不用总结全文、预告下一章或追加第二个结尾。`;
 }
 
-function renderRoleGuidanceInstruction(settings: ConversationRoleGuidanceSettings) {
-  const enabledGuidance = [
-    settings.emotionalGuidance ? offlineGuidancePrompts.emotionalGuidance : '',
-    settings.desireRestraint ? offlineGuidancePrompts.desireRestraint : '',
-    settings.antiToxicMasculinity ? offlineGuidancePrompts.antiToxicMasculinity : '',
-    settings.antiClicheRomance ? offlineGuidancePrompts.antiClicheRomance : '',
-    settings.dynamicWorldNarrative ? offlineGuidancePrompts.dynamicWorldNarrative : ''
-  ].filter(Boolean);
+function renderRoleGuidanceInstruction(settings: ConversationRoleGuidanceSettings, mode: ChatMode = 'offline') {
+  const guidancePrompts = mode === 'online' ? onlineRoleGuidancePrompts : offlineGuidancePrompts;
+  const enabledGuidance = mode === 'online'
+    ? Object.values(guidancePrompts)
+    : [
+        settings.emotionalGuidance ? guidancePrompts.emotionalGuidance : '',
+        settings.desireRestraint ? guidancePrompts.desireRestraint : '',
+        settings.antiToxicMasculinity ? guidancePrompts.antiToxicMasculinity : '',
+        settings.antiClicheRomance ? guidancePrompts.antiClicheRomance : '',
+        settings.dynamicWorldNarrative ? guidancePrompts.dynamicWorldNarrative : ''
+      ].filter(Boolean);
   if (!enabledGuidance.length) return '';
-  return `角色与大世界引导（仅执行当前已开启的分类）：
+  return `${mode === 'online' ? '线上角色与大世界引导（固定启用全部五项）' : '角色与大世界引导（仅执行当前已开启的分类）'}：
 ${enabledGuidance.join('\n\n')}`;
 }
 
@@ -1104,7 +1108,8 @@ export function selectWorldBooks(context: PromptContext) {
 
 export function buildPrompt(context: PromptContext, options: { includeOnlineChatPunctuation?: boolean; includeOnlineStickerSemantics?: boolean; includeOnlineRoutineCare?: boolean; includeAvailableStickers?: boolean; includeOnlineReplyTools?: boolean; includeCurrentTurnStickerImages?: boolean; outputPromptOverride?: string } = {}) {
   const selectedWorldBooks = selectWorldBooks(context);
-  const outputPrompt = options.outputPromptOverride ?? (context.mode === 'online' ? profileMutationPrompt : offlineReplyOutputPrompt);
+  const outputPrompt = options.outputPromptOverride ?? (context.mode === 'online' ? onlineReplyProtocolPrompt : offlineReplyOutputPrompt);
+  const roleplayPrompt = context.mode === 'online' ? onlineCoreRoleplayPrompt : `${baseRoleplayPrompt}\n\n${strictRoleplayRules}`;
   const includeOnlineReplyTools = options.includeOnlineReplyTools !== false;
   const includeMessageTime = normalizeTimeAwarenessSettings(context.timeAwareness).enabled;
   const characterName = getCharacterAiName(context.character);
@@ -1151,7 +1156,7 @@ export function buildPrompt(context: PromptContext, options: { includeOnlineChat
     .join('\n');
 
   return [
-    replaceTokens(`${baseRoleplayPrompt}\n\n${strictRoleplayRules}\n\n${outputPrompt}`, {
+    replaceTokens(`${roleplayPrompt}\n\n${outputPrompt}`, {
       '{{char}}': characterName,
       '{{char_nickname}}': replacePromptIdentityTokens(context.character.nickname, context),
       '{{char_signature}}': replacePromptIdentityTokens(context.character.signature, context),
@@ -1163,14 +1168,14 @@ export function buildPrompt(context: PromptContext, options: { includeOnlineChat
     }),
     modeInstructions[context.mode],
     context.mode === 'offline' ? renderOfflineSettingsPrompt(context.offlineSettings, context) : '',
-    context.mode === 'online' ? renderRoleGuidanceInstruction(normalizeRoleGuidanceSettings(context.onlineGuidance)) : '',
-    context.mode === 'online' && options.includeOnlineChatPunctuation !== false ? onlineChatPunctuationPrompt : '',
-    context.mode === 'online' && options.includeOnlineRoutineCare !== false ? replaceTokens(onlineChatRoutineCarePrompt, { '{{user}}': userName }) : '',
-    context.mode === 'online' && options.includeOnlineStickerSemantics !== false ? onlineStickerSemanticsPrompt : '',
+    context.mode === 'online' ? renderRoleGuidanceInstruction(normalizeRoleGuidanceSettings(context.onlineGuidance), 'online') : '',
+    context.mode === 'online' && options.includeOnlineChatPunctuation !== false ? onlinePunctuationPrompt : '',
+    context.mode === 'online' && options.includeOnlineRoutineCare !== false ? replaceTokens(onlineRoutineCarePrompt, { '{{char}}': characterName, '{{user}}': boundUserName || userName }) : '',
+    context.mode === 'online' && options.includeOnlineStickerSemantics !== false ? onlineStickerPrompt : '',
     context.mode === 'online' && includeOnlineReplyTools && context.narrationModeEnabled
-      ? replaceTokens(narrationModePrompt, {
+      ? replaceTokens(onlineNarrationPrompt, {
           '{{char}}': characterName,
-          '{{user}}': userName
+          '{{user}}': boundUserName || userName
         })
       : '',
     context.mode === 'online' && includeOnlineReplyTools && context.offlineInvitationEnabled === false
@@ -1186,9 +1191,18 @@ export function buildPrompt(context: PromptContext, options: { includeOnlineChat
     `记忆手册：\n${context.memorySummary || '暂无记忆手册。'}`,
     `世界书：\n${renderWorldBooks(selectedWorldBooks, context) || '无启用条目。'}`,
     context.mode === 'online' && includeOnlineReplyTools
-      ? 'Sticker / 图片 / 语音 / 定位 / 转账 / 一起听 / 网站链接规则：用户发送 Sticker 时，文字描述是用户提供的贴纸含义。用户发送真实图片时，若本次请求附带图片，你可以观察图片内容；用户发送文字描述卡片时，必须理解为“用户发送了一张图片，图片内容为描述文本”，虽然没有真实图片文件，也要按图片内容参与对话。用户或角色发送语音时，必须理解为对方用语音消息说出了对应文字内容，不要把它当成普通打字消息；角色也可以在合适时用 voice 项主动发送语音条。用户发送定位时，必须理解为用户把自己的当前位置发给了你，并告知了用户与角色之间的距离；角色也可以在合适时用 location 项主动发送自己的定位。用户发送转账时，必须理解为用户确实向你发起了对应金额的转账；你可以在后续按角色意愿接收或拒绝。角色也可以在合适时用 transfer 项主动向用户转账，等待用户接收或拒绝。用户发送一起听邀请时，必须理解为用户正在邀请你进入音乐页的一起听状态；你可以按关系和语境接受或拒绝。若你主动邀请用户一起听，先用普通 text 自然提出，再在 messageActions.musicListenInvite 写入邀请。一起听状态下你可以感知当前歌曲、播放进度和此刻歌词，也可以用 messageActions.musicActions 切歌、搜索播放或把当前/指定歌曲加入用户的“我的喜欢音乐”。用户发送网站链接卡片时，必须理解为用户转发了一个真实可读的网页链接给你，链接卡片附带的“网站内容”为你已经能看到的页面正文，可直接按其中内容参与对话。若未附带真实图片，不要臆造描述之外的图片细节。'
+      ? replaceTokens(onlineInputSemanticsPrompt, { '{{char}}': characterName })
       : '',
     context.mode === 'online' && includeOnlineReplyTools && options.includeAvailableStickers !== false ? `角色可用 Stickers：\n${renderAvailableStickers(context)}` : '',
+    context.mode === 'online' && includeOnlineReplyTools
+      ? [
+          onlinePendingTransferPrompt,
+          onlinePendingMusicInvitePrompt,
+          onlineCallResponsePrompt,
+          onlineGobangResponsePrompt,
+          replaceTokens(onlineRelationshipEventPrompt, { '{{char}}': characterName })
+        ].join('\n\n')
+      : '',
     includeOnlineReplyTools ? renderProfileThemePrompt(context) : '',
     includeOnlineReplyTools ? renderThoughtChainThemePrompt(context) : '',
     context.mode === 'online' && context.replyInstruction ? `本次生成任务：\n${context.replyInstruction}` : '',
