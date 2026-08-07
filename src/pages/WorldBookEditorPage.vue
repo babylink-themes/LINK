@@ -40,7 +40,7 @@
             <label>
               <span>Collection</span>
               <select v-model="draft.scope" :disabled="isTabooDraft">
-                <option value="global-online">全站读取</option>
+                <option value="global-online">{{ isTabooDraft ? '全站读取' : '线上全局收藏' }}</option>
                 <option value="global-offline">线下全局收藏</option>
                 <option value="local">角色局部收藏</option>
               </select>
