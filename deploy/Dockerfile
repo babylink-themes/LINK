@@ -11,7 +11,7 @@ ENV VITE_DROPBOX_APP_KEY=$VITE_DROPBOX_APP_KEY
 ENV LINK_MIN_ANDROID_NATIVE_BUILD=$LINK_MIN_ANDROID_NATIVE_BUILD
 ENV LINK_MIN_IOS_NATIVE_BUILD=$LINK_MIN_IOS_NATIVE_BUILD
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --registry=https://registry.npmjs.org/ --replace-registry-host=always
 COPY tsconfig.json tsconfig.app.json tsconfig.node.json vite.config.ts index.html ./
 COPY public ./public
 COPY src ./src
@@ -22,7 +22,7 @@ FROM node:22-alpine AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev --registry=https://registry.npmjs.org/ --replace-registry-host=always && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server-dist ./server-dist
 COPY --from=build /app/server/public ./server/public
