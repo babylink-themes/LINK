@@ -75,9 +75,9 @@
           </template>
         </div>
       </div>
-      <div v-if="currentConversationReplying" class="typing-indicator">
+      <button v-if="currentConversationReplying" class="typing-indicator" type="button" aria-label="取消当前回复" title="点击取消当前回复" @click="showCancelReplyConfirm = true">
         <span></span><span></span><span></span>
-      </div>
+      </button>
     </main>
 
     <section v-if="selectionMode" class="selection-toolbar">
@@ -453,6 +453,17 @@
         <div class="listen-stop-actions">
           <button class="secondary-action" type="button" @click="showStopListenConfirm = false">取消</button>
           <button class="primary-action" type="button" @click="confirmStopListenTogether">关闭</button>
+        </div>
+      </section>
+    </AppModal>
+
+    <AppModal v-model="showCancelReplyConfirm" title="取消回复" :show-header="false" variant="ins">
+      <section class="delete-confirm-sheet">
+        <h3>取消这次回复？</h3>
+        <p>将停止本次 API 回复；已经显示的消息会保留。</p>
+        <div class="delete-confirm-actions">
+          <button class="secondary-action" type="button" @click="showCancelReplyConfirm = false">继续等待</button>
+          <button class="danger-action" type="button" @click="confirmCancelReply">确认取消</button>
         </div>
       </section>
     </AppModal>
@@ -993,6 +1004,7 @@ const showTransferPanel = ref(false);
 const showCommercePanel = ref(false);
 const showMusicListenPanel = ref(false);
 const showStopListenConfirm = ref(false);
+const showCancelReplyConfirm = ref(false);
 const showNarrationPanel = ref(false);
 const showMessageMenu = ref(false);
 const showEditModal = ref(false);
@@ -2007,6 +2019,11 @@ async function requestReplyFromUserAvatar() {
     return;
   }
   await sendAndReply('');
+}
+
+function confirmCancelReply() {
+  if (currentConversationReplying.value) store.cancelConversationReply(props.id);
+  showCancelReplyConfirm.value = false;
 }
 
 async function sendStickerSuggestion(sticker: Sticker) {
@@ -6142,8 +6159,20 @@ onBeforeUnmount(() => {
   gap: 3px;
   margin: 7px 0 7px 38px;
   padding: 8px 11px;
+  border: 0;
   border-radius: 15px;
   background: #ffffff;
+  cursor: pointer;
+  font: inherit;
+}
+
+.typing-indicator:focus-visible {
+  outline: 2px solid #5d8cf0;
+  outline-offset: 2px;
+}
+
+.typing-indicator:active {
+  transform: scale(0.96);
 }
 
 .typing-indicator span {

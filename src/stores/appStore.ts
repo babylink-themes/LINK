@@ -5055,6 +5055,9 @@ export const useAppStore = defineStore('app', () => {
     if (!conversation || conversation.kind !== 'group' || !activeUser || !conversation.groupMembers?.length || isConversationReplying(conversationId)) return [];
     const runId = startConversationReply(conversationId);
     if (!runId) return [];
+    const replyCancelVersion = replyCancelVersions.get(conversationId) ?? 0;
+    const replyRequestAbortController = new AbortController();
+    activeReplyRequestAbortControllers.set(conversationId, replyRequestAbortController);
     try {
       const recentMessages = messagesForConversation(conversationId).filter((message) => !message.contextOnly).slice(-36);
       const groupMessageContent = (message: ChatMessage | ChatMessageQuote) => {
@@ -5093,8 +5096,10 @@ export const useAppStore = defineStore('app', () => {
         membershipStatus: groupUserMember(conversation)?.membershipStatus ?? 'active',
         mode: conversation.activeMode,
         settings: settings.value ?? undefined,
-        modelOverride: getConversationTextModelOverride(chatSettings, conversation.activeMode)
+        modelOverride: getConversationTextModelOverride(chatSettings, conversation.activeMode),
+        signal: replyRequestAbortController.signal
       });
+      if (isReplyRunCancelled(conversationId, replyCancelVersion)) return [];
       const baseTime = Date.now();
       const replyBatchId = createId('group-reply');
       const generatedMessages = generated.messages.map((entry, index) => {
@@ -5117,7 +5122,8 @@ export const useAppStore = defineStore('app', () => {
       });
       if (generatedMessages.length) {
         const deliveredMessages = await publishReplyBatch(conversationId, generatedMessages, {
-          stageOnline: conversation.activeMode === 'online'
+          stageOnline: conversation.activeMode === 'online',
+          cancelVersion: replyCancelVersion
         });
         if (!deliveredMessages.length) return [];
         const latestConversation = conversationById(conversationId) ?? conversation;
@@ -5143,9 +5149,13 @@ export const useAppStore = defineStore('app', () => {
       void maybeAutoCaptureConversationMemory(conversationId);
       return generatedMessages;
     } catch (error) {
+      if (isReplyRunCancelled(conversationId, replyCancelVersion)) return [];
       showConfigAlert(error instanceof Error ? error.message : '群聊回复生成失败。', '无法生成群聊回复');
       return [];
     } finally {
+      if (activeReplyRequestAbortControllers.get(conversationId) === replyRequestAbortController) {
+        activeReplyRequestAbortControllers.delete(conversationId);
+      }
       finishConversationReply(conversationId, runId);
     }
   }

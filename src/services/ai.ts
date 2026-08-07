@@ -4556,6 +4556,7 @@ export async function generateGroupChatReply(input: {
   mode?: 'online' | 'offline';
   settings?: AppSettings;
   modelOverride?: string;
+  signal?: AbortSignal;
 }): Promise<GroupChatReplyResult> {
   requireTextGenerationConfig(input.settings, input.modelOverride, '群聊回复');
   const canonicalUserName = getUserAiName(input.user);
@@ -4627,7 +4628,7 @@ ${stickerList || '无'}
 7. 群内出现匿名小号消息时，不得推断、暗示或泄露它与当前用户的真实身份关系。
 8. 图片与语音是群内所有当前成员共同可见的真实消息：真实图片已随请求附带时可直接识图；文字描述卡片要理解为用户发送了描述所表达的图片；语音条要理解为发送者用语音说出了转写内容。引用消息必须结合被引用内容理解，不能当成孤立文本。
 9. 只输出 JSON：{"messages":[{"authorMemberId":"成员id","type":"text|voice|image|sticker","content":"正文或描述","stickerId":"可选","quoteMessageId":"可选，仅线上引用的历史消息id"}],"privateInitiations":[{"characterId":"已有角色ID","reason":"为什么此刻要私聊用户"}],"membershipDecision":"approve|reject|null"}`;
-  const apiReply = await callTextApi(input.settings, prompt, input.modelOverride, await getPreparedVisualImageParts(input));
+  const apiReply = await callTextApi(input.settings, prompt, input.modelOverride, await getPreparedVisualImageParts(input), { signal: input.signal });
   const parsed = JSON.parse(extractJsonContent(apiReply)) as Record<string, unknown>;
   const rawMessages = Array.isArray(parsed.messages) ? parsed.messages : [];
   const allowedMembers = new Map(input.members.filter((member) => member.identityType !== 'user' && (member.membershipStatus ?? 'active') === 'active').map((member) => [member.id, member]));
