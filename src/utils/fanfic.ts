@@ -6,6 +6,14 @@ export function getFanficTextModelOverride(settings?: AppSettings) {
   return settings?.modelOverrides.content?.trim() ?? '';
 }
 
+export function replaceFanficIdentityTokens(value: string, input: { userName: string; characterName: string }) {
+  return value
+    .replace(/\{\{\s*char\s*\}\}/gi, input.characterName)
+    .replace(/<\s*char\s*>/gi, input.characterName)
+    .replace(/\{\{\s*user\s*\}\}/gi, input.userName)
+    .replace(/<\s*user\s*>/gi, input.userName);
+}
+
 function uniqueStrings(values: unknown, limit = 12) {
   if (!Array.isArray(values)) return [];
   return [...new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean))].slice(0, limit);

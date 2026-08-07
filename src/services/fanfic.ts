@@ -11,7 +11,7 @@ import type {
   WorldBookEntry
 } from '@/types/domain';
 import { createId } from '@/utils/id';
-import { defaultFanficStoryBible, getFanficTextModelOverride, serializeFanficLocalWorldBooks } from '@/utils/fanfic';
+import { defaultFanficStoryBible, getFanficTextModelOverride, replaceFanficIdentityTokens, serializeFanficLocalWorldBooks } from '@/utils/fanfic';
 import { describeGeneratedFanficChapterIssues, generatedFanficChapterPayloadIsComplete, normalizeGeneratedFanficChapterPayload } from '@/utils/fanficChapter';
 import { parseFanficJsonResponse } from '@/utils/fanficJson';
 import { getSelectedImageModelOption } from '@/utils/settings';
@@ -47,6 +47,11 @@ class FanficJsonResponseError extends Error {
   override name = 'FanficJsonResponseError';
 }
 
+interface FanficIdentityReplacement {
+  userName: string;
+  characterName: string;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
@@ -63,25 +68,27 @@ function asStringArray(value: unknown, limit = 12) {
 async function requestFanficJson(
   settings: AppSettings | undefined,
   prompt: string,
-  options: TextGenerationOptions,
+  options: TextGenerationOptions & { identity?: FanficIdentityReplacement },
   validate: (value: unknown) => boolean = () => true,
   invalidStructureMessage: string | ((value: unknown) => string) = '文本模型返回的 JSON 缺少必要字段。',
   maxAttempts = 2
 ) {
+  const { identity, ...generationOptions } = options;
   const modelOverride = getFanficTextModelOverride(settings);
   if (!hasSelectedTextGenerationConfig(settings, modelOverride)) {
     throw new Error('请先在模型切换中配置全局内容创作模型，再生成同人文内容。');
   }
+  const normalizedPrompt = identity ? replaceFanficIdentityTokens(prompt, identity) : prompt;
   let lastError: unknown;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const attemptPrompt = attempt === 0
-      ? prompt
-      : `${prompt}\n\n重要重试要求：上一次响应不是可解析的完整 JSON。请从头重新生成全部字段，使用紧凑 JSON，不要 Markdown 代码块，不要解释，不要省略结尾的引号、数组或花括号。`;
+      ? normalizedPrompt
+      : `${normalizedPrompt}\n\n重要重试要求：上一次响应不是可解析的完整 JSON。请从头重新生成全部字段，使用紧凑 JSON，不要 Markdown 代码块，不要解释，不要省略结尾的引号、数组或花括号。`;
     const reply = await requestTextGeneration(settings, attemptPrompt, modelOverride, {
-      ...options,
+      ...generationOptions,
       jsonMode: true,
-      temperature: attempt === 0 ? options.temperature : Math.min(options.temperature ?? 0.9, 0.72),
-      maxTokens: options.maxTokens ? Math.min(8192, options.maxTokens + attempt * 800) : undefined
+      temperature: attempt === 0 ? generationOptions.temperature : Math.min(generationOptions.temperature ?? 0.9, 0.72),
+      maxTokens: generationOptions.maxTokens ? Math.min(8192, generationOptions.maxTokens + attempt * 800) : undefined
     });
     try {
       const parsed = parseFanficJsonResponse(reply);
@@ -231,7 +238,11 @@ export async function generateFanficBookPlan(input: {
   const parsedFoundation = await requestFanficJson(
     input.settings,
     foundationPrompt,
-    { temperature: 0.76, maxTokens: 3600 },
+    {
+      temperature: 0.76,
+      maxTokens: 3600,
+      identity: { userName: input.userName, characterName: input.characterName }
+    },
     planFoundationIsComplete,
     '同人文基础设定缺少必要字段。'
   );
@@ -466,7 +477,11 @@ export async function generateFanficChapter(input: {
   const parsed = await requestFanficJson(
     input.settings,
     buildChapterPrompt(input),
-    { temperature: 0.82, maxTokens: 7800 },
+    {
+      temperature: 0.82,
+      maxTokens: 7800,
+      identity: { userName: input.book.userName, characterName: input.book.characterName }
+    },
     generatedFanficChapterPayloadIsComplete,
     (value) => {
       const issues = describeGeneratedFanficChapterIssues(value);
@@ -548,7 +563,11 @@ export async function generateFanficHotspotComments(input: {
   const parsed = await requestFanficJson(
     input.settings,
     buildFanficHotspotCommentPrompt({ ...input, chapterCharacters }),
-    { temperature: 0.86, maxTokens: 3200 },
+    {
+      temperature: 0.86,
+      maxTokens: 3200,
+      identity: { userName: input.book.userName, characterName: input.book.characterName }
+    },
     (value) => isRecord(value) && generatedCommentCollectionIsUsable(value.comments),
     '这个高潮点的评论 JSON 没有可用评论。',
     1

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import type { FanficChapter } from '../src/types/domain.ts';
+import { replaceFanficIdentityTokens } from '../src/utils/fanfic.ts';
 import { collectFanficChapterContinuity, resequenceFanficChapters } from '../src/utils/fanficChapter.ts';
 
 function chapter(id: string, order: number, continuity: string[]): FanficChapter {
@@ -41,5 +42,10 @@ assert.deepEqual(collectFanficChapterContinuity([third, second, first]), [
   '进入仓库'
 ]);
 assert.deepEqual(collectFanficChapterContinuity([first, second, third], 2), ['拿到钥匙', '进入仓库']);
+
+assert.equal(
+  replaceFanficIdentityTokens('{{user}} <user> {{char}} <char>', { userName: '小满', characterName: '阿衡' }),
+  '小满 小满 阿衡 阿衡'
+);
 
 console.log('fanfic chapter regression: passed');
