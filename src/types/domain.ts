@@ -1703,7 +1703,7 @@ export interface AppThemeSettings {
   offline: ThemeStyleScopeSettings;
 }
 
-export type McpServerKind = 'custom' | 'xiaohongshu' | 'qq' | 'reality' | 'notification-inbox' | 'termux' | 'taobao-search' | 'douyin-search' | 'xiaohongshu-search';
+export type McpServerKind = 'custom' | 'xiaohongshu' | 'qq' | 'reality' | 'moltbook' | 'termux' | 'taobao-search' | 'douyin-search' | 'xiaohongshu-search';
 
 export type McpToolPolicy = 'disabled' | 'read-only' | 'all';
 
@@ -1739,6 +1739,7 @@ export interface McpServerConfig {
   lastStatus: McpServerStatus;
   lastCheckedAt: number;
   lastError: string;
+  moltbookAccountId?: string;
 }
 
 export interface McpSettings {

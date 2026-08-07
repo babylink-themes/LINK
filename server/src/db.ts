@@ -124,12 +124,45 @@ export async function migrateDatabase() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS moltbook_accounts (
+      id UUID PRIMARY KEY,
+      qq TEXT NOT NULL REFERENCES users(qq) ON DELETE CASCADE,
+      agent_name TEXT NOT NULL,
+      api_key_ciphertext TEXT NOT NULL,
+      claim_url TEXT NOT NULL DEFAULT '',
+      verification_code TEXT NOT NULL DEFAULT '',
+      claim_status TEXT NOT NULL DEFAULT 'pending' CHECK (claim_status IN ('pending', 'claimed', 'unclaimed', 'disabled', 'unknown')),
+      agent_profile_url TEXT NOT NULL DEFAULT '',
+      agent_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      last_checked_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (qq, agent_name)
+    );
+
+    CREATE TABLE IF NOT EXISTS moltbook_activity (
+      id BIGSERIAL PRIMARY KEY,
+      account_id UUID NOT NULL REFERENCES moltbook_accounts(id) ON DELETE CASCADE,
+      qq TEXT NOT NULL REFERENCES users(qq) ON DELETE CASCADE,
+      character_id TEXT NOT NULL DEFAULT '',
+      action TEXT NOT NULL,
+      tool_name TEXT NOT NULL DEFAULT '',
+      target TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL CHECK (status IN ('succeeded', 'failed', 'rate-limited', 'verification-pending', 'pending', 'blocked')),
+      summary TEXT NOT NULL DEFAULT '',
+      response_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE INDEX IF NOT EXISTS memberships_active_idx ON memberships (qq, active, last_seen_at DESC);
     CREATE INDEX IF NOT EXISTS sessions_token_idx ON sessions (token_hash) WHERE revoked_at IS NULL;
     CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions (qq, expires_at DESC);
     CREATE INDEX IF NOT EXISTS challenges_expiry_idx ON login_challenges (expires_at);
     CREATE INDEX IF NOT EXISTS releases_latest_idx ON releases (platform, published, version_code DESC);
     CREATE INDEX IF NOT EXISTS release_source_tokens_user_idx ON release_source_tokens (qq, expires_at DESC) WHERE revoked_at IS NULL;
+    CREATE INDEX IF NOT EXISTS moltbook_accounts_user_idx ON moltbook_accounts (qq, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS moltbook_activity_user_idx ON moltbook_activity (qq, created_at DESC);
+    CREATE INDEX IF NOT EXISTS moltbook_activity_account_idx ON moltbook_activity (account_id, created_at DESC);
   `);
 
   await query(`

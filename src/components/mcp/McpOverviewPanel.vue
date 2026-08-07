@@ -75,7 +75,7 @@
       </header>
       <div v-if="servers.length" class="mcp-peek-list">
         <button v-for="server in servers.slice(0, 3)" :key="server.id" type="button" @click="emit('navigate', 'server', server.id)">
-          <span class="mcp-kind-avatar" :class="`kind-${server.kind}`"><component :is="server.kind === 'notification-inbox' ? BellRing : server.kind === 'reality' ? Smartphone : server.kind === 'qq' ? MessageCircle : Cable" :size="17" /></span>
+          <span class="mcp-kind-avatar" :class="`kind-${server.kind}`"><component :is="server.kind === 'reality' ? Smartphone : server.kind === 'qq' ? MessageCircle : Cable" :size="17" /></span>
           <span><strong>{{ server.name }}</strong><small>{{ server.tools.filter((tool) => tool.enabled).length }} 个能力</small></span>
           <i class="mcp-status-dot" :class="server.lastStatus"></i>
           <ChevronRight :size="16" />
@@ -87,7 +87,7 @@
 </template>
 
 <script setup lang="ts">
-import { ArrowUpRight, BellRing, Cable, CheckCircle2, ChevronRight, Globe2, MessageCircle, Send, Smartphone, Sparkles } from 'lucide-vue-next';
+import { ArrowUpRight, Cable, CheckCircle2, ChevronRight, Globe2, MessageCircle, Send, Smartphone, Sparkles } from 'lucide-vue-next';
 import { useRouter } from 'vue-router';
 import type { McpServerConfig } from '@/types/domain';
 

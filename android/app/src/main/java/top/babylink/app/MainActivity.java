@@ -29,7 +29,6 @@ public class MainActivity extends BridgeActivity {
 		registerPlugin(LinkDisplayPlugin.class);
 		registerPlugin(LinkRealityPlugin.class);
 		registerPlugin(LinkMcpLocalPlugin.class);
-		registerPlugin(LinkNotificationInboxPlugin.class);
 		super.onCreate(savedInstanceState);
 		LinkDisplayPlugin.applyStoredFullscreen(this);
 		getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {

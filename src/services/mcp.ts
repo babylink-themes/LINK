@@ -1,5 +1,6 @@
 import type { AppSettings, CharacterProfile, ChatMcpResultAttachment, McpServerConfig, McpServerKind, McpToolDefinition } from '@/types/domain';
-import { createBuiltinNotificationInboxMcpServer, createBuiltinRealityMcpServer, notificationInboxMcpTools, realityMcpTools } from '@/data/realityMcp';
+import { createBuiltinRealityMcpServer, realityMcpTools } from '@/data/realityMcp';
+import { createBuiltinMoltbookMcpServer } from '@/data/moltbookMcp';
 import { fetchNativeMcpLocal, nativeMcpLocalAvailable } from '@/services/nativeMcpLocal';
 import { executeRealityMcpTool } from '@/services/realityMcp';
 import { createActiveTimeout, isFetchInterruptedError, waitForActiveNetworkWindow } from '@/utils/activeTimeout';
@@ -114,10 +115,15 @@ export interface McpToolExecutionRequest {
   args: Record<string, unknown>;
   settings?: AppSettings;
   persistSettings?: (settings: AppSettings) => Promise<void>;
+  characterId?: string;
 }
 
 function isBuiltinDeviceMcpServer(server: McpServerConfig) {
-  return server.kind === 'reality' || server.kind === 'notification-inbox';
+  return server.kind === 'reality';
+}
+
+function isBuiltinMoltbookMcpServer(server: McpServerConfig) {
+  return server.kind === 'moltbook';
 }
 
 export type McpToolExecutionOutcome =
@@ -513,15 +519,14 @@ function normalizeDiscoveredTool(tool: McpRawTool): McpToolDefinition | null {
 
 export async function inspectMcpServer(server: McpServerConfig): Promise<McpServerInspection> {
   if (isBuiltinDeviceMcpServer(server)) {
-    const builtinTools = server.kind === 'notification-inbox' ? notificationInboxMcpTools : realityMcpTools;
     return {
-      tools: builtinTools.map((tool) => ({
+      tools: realityMcpTools.map((tool) => ({
         ...tool,
         inputSchema: { ...tool.inputSchema },
         enabled: true
       })),
       protocolVersion: 'builtin',
-      serverName: server.kind === 'notification-inbox' ? 'BabyLink Notification Inbox MCP' : 'BabyLink Reality MCP',
+      serverName: 'BabyLink Reality MCP',
       serverVersion: '1.0.0'
     };
   }
@@ -586,7 +591,7 @@ function validateMcpToolArguments(server: McpServerConfig, tool: McpToolDefiniti
 }
 
 function validateMcpToolExecution(server: McpServerConfig, toolName: string, args: Record<string, unknown>) {
-  if (!isBuiltinDeviceMcpServer(server)) normalizeMcpRemoteUrl(server.url);
+  if (!isBuiltinDeviceMcpServer(server) && !isBuiltinMoltbookMcpServer(server)) normalizeMcpRemoteUrl(server.url);
   const configuredTool = server.tools.find((tool) => tool.name === toolName);
   if (!configuredTool) throw new Error('该 MCP 服务没有这个工具，重新检测连接后再试。');
   const accessState = getMcpToolAccessState(server, configuredTool);
@@ -623,6 +628,28 @@ export async function executeMcpTools(requests: McpToolExecutionRequest[]): Prom
         const configuredTool = validateMcpToolExecution(server, toolName, args);
         if (isBuiltinDeviceMcpServer(server)) {
           const result = await executeRealityMcpTool(request);
+          outcomes.push({ ok: true, result });
+          continue;
+        }
+        if (isBuiltinMoltbookMcpServer(server)) {
+          if (!server.moltbookAccountId) throw new Error('Moltbook 尚未绑定 Agent 账号。');
+          const response = await fetch('/api/moltbook/accounts/' + encodeURIComponent(server.moltbookAccountId) + '/actions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ toolName, args, characterId: request.characterId })
+          });
+          const payload = await response.json().catch(() => ({}));
+          const text = typeof payload?.error === 'string'
+            ? payload.error
+            : JSON.stringify(payload?.payload ?? payload);
+          const result: McpToolExecutionResult = {
+            serverId: server.id,
+            serverName: server.name,
+            toolName,
+            text: text.slice(0, maxToolResultLength),
+            isError: !response.ok || payload?.ok === false
+          };
           outcomes.push({ ok: true, result });
           continue;
         }
@@ -670,8 +697,8 @@ export async function executeMcpTools(requests: McpToolExecutionRequest[]): Prom
   return outcomes;
 }
 
-export async function executeMcpTool(server: McpServerConfig, toolName: string, args: Record<string, unknown>): Promise<McpToolExecutionResult> {
-  const [outcome] = await executeMcpTools([{ server, toolName, args }]);
+export async function executeMcpTool(server: McpServerConfig, toolName: string, args: Record<string, unknown>, characterId?: string): Promise<McpToolExecutionResult> {
+  const [outcome] = await executeMcpTools([{ server, toolName, args, ...(characterId ? { characterId } : {}) }]);
   if (!outcome) throw new Error('MCP 工具调用没有返回结果。');
   if (!outcome.ok) throw new Error(outcome.error);
   return outcome.result;
@@ -700,12 +727,13 @@ function inferServerKind(name: string, url: string): McpServerKind {
   if (/taobao|taoke|淘宝|天猫|tmall/.test(source)) return 'taobao-search';
   if (/douyin|抖音/.test(source)) return 'douyin-search';
   if (/xiaohongshu|小红书|rednote|xhs/.test(source)) return 'xiaohongshu-search';
+  if (/moltbook/.test(source)) return 'moltbook';
   return 'custom';
 }
 
 export function createMcpServerTemplate(kind: McpServerKind = 'custom'): McpServerConfig {
   if (kind === 'reality') return createBuiltinRealityMcpServer();
-  if (kind === 'notification-inbox') return createBuiltinNotificationInboxMcpServer();
+  if (kind === 'moltbook') return createBuiltinMoltbookMcpServer();
   const metadata = kind === 'termux'
     ? {
         name: 'BabyLink Termux 本机网关',

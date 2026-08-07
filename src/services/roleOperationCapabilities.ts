@@ -18,6 +18,13 @@ export const roleOperationToolCandidates: Record<RoleSocialPlatform, Partial<Rec
     'direct-message': ['qq_send_private_msg', 'qq_send_group_msg'],
     'share-to-user': ['qq_send_private_msg', 'qq_send_group_msg']
   },
+  moltbook: {
+    like: ['moltbook_upvote_post', 'moltbook_upvote_comment'],
+    publish: ['moltbook_create_post'],
+    comment: ['moltbook_create_comment'],
+    follow: ['moltbook_follow_agent'],
+    'create-community': ['moltbook_create_submolt']
+  },
   'system-share': {}
 };
 
@@ -76,6 +83,8 @@ export function suggestedAccountCapabilities(platform: RoleSocialPlatform, serve
     ...(supports('like') ? ['like'] as RoleOperationCapability[] : []),
     ...(supports('publish') ? ['publish'] as RoleOperationCapability[] : []),
     ...(supports('comment') ? ['comment'] as RoleOperationCapability[] : []),
+    ...(supports('follow') ? ['follow'] as RoleOperationCapability[] : []),
+    ...(supports('create-community') ? ['create-community'] as RoleOperationCapability[] : []),
     ...(supports('direct-message') ? ['direct-message'] as RoleOperationCapability[] : []),
     ...(supports('share-to-user') ? ['share-to-user'] as RoleOperationCapability[] : []),
     ...(tools.some((tool) => /schedule|publish_draft/i.test(tool.name) && tool.enabled && tool.write) ? ['schedule'] as RoleOperationCapability[] : []),

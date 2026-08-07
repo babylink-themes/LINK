@@ -60,6 +60,20 @@
       <p class="mcp-inline-privacy"><ShieldCheck :size="15" /> 账号只登录在电脑，平台流量不会经过 BabyLink 云端。</p>
     </section>
 
+    <section class="mcp-moltbook-card">
+      <header class="mcp-section-title compact">
+        <div><span>MOLTBOOK OFFICIAL API</span><h2>给角色开一个社交账号</h2></div>
+        <small>新手友好</small>
+      </header>
+      <div class="mcp-moltbook-copy"><strong>让角色在 Moltbook 浏览、发帖、评论和互动。</strong><p>不需要电脑、Termux、MCP 地址或 API Key。登录 BabyLink 后取一个名字，再完成 Moltbook 官方认领即可。</p></div>
+      <div class="mcp-moltbook-steps" aria-label="Moltbook 接入步骤">
+        <span><b>1</b><small>取个名字</small></span>
+        <span><b>2</b><small>官方认领</small></span>
+        <span><b>3</b><small>绑定角色</small></span>
+      </div>
+      <button class="mcp-moltbook-action" type="button" @click="emit('add', 'moltbook')"><span><Network :size="19" /></span><strong>开始连接 Moltbook</strong><small>不会填写 API Key</small><ChevronRight :size="16" /></button>
+    </section>
+
     <section class="mcp-termux-card">
       <header class="mcp-section-title compact">
         <div><span>ANDROID LOCAL HUB</span><h2>不用电脑的本机能力</h2></div>
@@ -143,7 +157,7 @@
 </template>
 
 <script setup lang="ts">
-import { AlertTriangle, Apple, BellRing, Cable, ChevronRight, Clapperboard, Copy, Download, Heart, LoaderCircle, MessageCircle, Monitor, Network, Plus, RefreshCw, Search, ShieldCheck, ShoppingBag, Smartphone, TerminalSquare, Upload } from 'lucide-vue-next';
+import { AlertTriangle, Apple, Cable, ChevronRight, Clapperboard, Copy, Download, Heart, LoaderCircle, MessageCircle, Monitor, Network, Plus, RefreshCw, Search, ShieldCheck, ShoppingBag, Smartphone, TerminalSquare, Upload } from 'lucide-vue-next';
 import { computed, onMounted, reactive, ref, type Component } from 'vue';
 import { downloadDesktopBridgeRelease, fetchDesktopBridgeRelease, type DesktopBridgePlatform, type DesktopBridgeRelease } from '@/services/desktopBridgeRelease';
 import type { McpServerConfig, McpServerKind, McpToolPolicy } from '@/types/domain';
@@ -243,24 +257,24 @@ function releaseDescription(item: typeof desktopReleaseItems.value[number]) {
 
 function serverIcon(kind: McpServerKind): Component {
   if (kind === 'reality') return Smartphone;
-  if (kind === 'notification-inbox') return BellRing;
   if (kind === 'termux') return TerminalSquare;
   if (kind === 'qq') return MessageCircle;
   if (kind === 'xiaohongshu' || kind === 'xiaohongshu-search') return Heart;
   if (kind === 'taobao-search') return ShoppingBag;
   if (kind === 'douyin-search') return Clapperboard;
+  if (kind === 'moltbook') return Network;
   return Network;
 }
 
 function kindLabel(kind: McpServerKind) {
   if (kind === 'reality') return 'ON THIS PHONE';
-  if (kind === 'notification-inbox') return 'SYSTEM NOTIFICATIONS';
   if (kind === 'termux') return 'ANDROID LOCAL HUB';
   if (kind === 'qq') return 'QQ BRIDGE';
   if (kind === 'xiaohongshu') return 'XIAOHONGSHU BRIDGE';
   if (kind === 'taobao-search') return 'TAOBAO SEARCH';
   if (kind === 'douyin-search') return 'DOUYIN SEARCH';
   if (kind === 'xiaohongshu-search') return 'RED SEARCH';
+  if (kind === 'moltbook') return 'MOLTBOOK';
   return 'REMOTE MCP';
 }
 

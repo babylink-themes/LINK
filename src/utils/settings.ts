@@ -1,5 +1,6 @@
 import type { ApiVendor, ApiVendorModel, AppKeepAliveSettings, AppRingtoneSettings, AppSettings, AppThemeSettings, ChatModelOverrides, CharacterProfileHomepageAutoCleanupSettings, CharacterRingtoneSettings, CharacterSmallTheaterAutoCleanupSettings, CharacterVoomAutoCleanupSettings, CloudBackupProvider, CloudBackupSettings, DoubaoTtsAudioFormat, DoubaoTtsSettings, DoubaoTtsTextType, GitHubBackupSettings, ImageModelScope, ImageModelSelection, ImagePromptPreset, ImageProviderType, McpServerConfig, McpServerKind, McpSettings, McpToolDefinition, MinimaxTtsAudioFormat, MinimaxTtsSettings, NovelAiImageSettings, OpenAiImageSettings, OpenAiTtsAudioFormat, OpenAiTtsSettings, PollinationsImageSettings, ProfileHomepageAutoCleanupPreset, RealityCalendarEvent, RealityMemo, RealityMcpSettings, RealityRecurrenceRule, RealityReminder, RingtoneAsset, RingtoneEventType, SmallTheaterAutoCleanupPreset, ThemeFontEntry, ThemeFontSource, ThemeGlobalSettings, ThemeStylePreset, ThemeStylePresetSource, ThemeStyleScopeSettings, TtsProviderType, VoomAutoCleanupPreset } from '@/types/domain';
-import { createBuiltinNotificationInboxMcpServer, createBuiltinRealityMcpServer } from '@/data/realityMcp';
+import { createBuiltinRealityMcpServer } from '@/data/realityMcp';
+import { createBuiltinMoltbookMcpServer } from '@/data/moltbookMcp';
 import { createId } from './id';
 import { normalizeThoughtChainThemes } from './thoughtChainThemes';
 import { defaultGlobalBottomBarOffset, normalizeGlobalBottomBarOffset } from './themeBottomBar';
@@ -211,7 +212,7 @@ export function createDefaultMcpSettings(): McpSettings {
   return {
     enabled: true,
     maxToolCallsPerReply: 3,
-    servers: [createBuiltinRealityMcpServer(), createBuiltinNotificationInboxMcpServer()]
+    servers: [createBuiltinRealityMcpServer()]
   };
 }
 
@@ -257,7 +258,7 @@ function normalizeMcpServerKind(value: unknown): McpServerKind {
   return value === 'xiaohongshu'
     || value === 'qq'
     || value === 'reality'
-    || value === 'notification-inbox'
+    || value === 'moltbook'
     || value === 'termux'
     || value === 'taobao-search'
     || value === 'douyin-search'
@@ -287,25 +288,20 @@ function normalizeMcpTool(value: unknown): McpToolDefinition | null {
 function normalizeMcpServer(value: unknown): McpServerConfig | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const source = value as Partial<McpServerConfig>;
+  if (String(source.kind ?? '') === ['notification', 'inbox'].join('-')) return null;
   const kind = normalizeMcpServerKind(source.kind);
   const id = String(source.id ?? '').trim();
-  const builtin = kind === 'reality' || kind === 'notification-inbox';
-  const url = kind === 'reality'
-    ? 'builtin://reality'
-    : kind === 'notification-inbox'
-      ? 'builtin://notification-inbox'
-      : String(source.url ?? '').trim();
+  const builtin = kind === 'reality' || kind === 'moltbook';
+  const url = kind === 'reality' ? 'builtin://reality' : kind === 'moltbook' ? 'builtin://moltbook' : String(source.url ?? '').trim();
   if (!id || (!url && !builtin)) return null;
-  const fallback = kind === 'reality'
-    ? createBuiltinRealityMcpServer()
-    : kind === 'notification-inbox'
-      ? createBuiltinNotificationInboxMcpServer()
-      : null;
+  const fallback = kind === 'reality' ? createBuiltinRealityMcpServer() : null;
+  const moltbookFallback = kind === 'moltbook' ? createBuiltinMoltbookMcpServer() : null;
   const normalizedTools = Array.isArray(source.tools)
     ? source.tools.map(normalizeMcpTool).filter((tool): tool is McpToolDefinition => Boolean(tool))
     : [];
-  const tools = fallback
-    ? fallback.tools.map((tool) => ({
+  const builtinFallback = fallback ?? moltbookFallback;
+  const tools = builtinFallback
+    ? builtinFallback.tools.map((tool) => ({
       ...tool,
       enabled: normalizedTools.find((candidate) => candidate.name === tool.name)?.enabled ?? tool.enabled
     }))
@@ -313,31 +309,32 @@ function normalizeMcpServer(value: unknown): McpServerConfig | null {
   const timeoutMs = Math.round(Number(source.timeoutMs) || 45_000);
   return {
     id,
-    name: String(source.name ?? '').trim() || fallback?.name || 'MCP Server',
+    name: String(source.name ?? '').trim() || builtinFallback?.name || 'MCP Server',
     kind,
-    description: String(source.description ?? '').trim() || fallback?.description || '',
+    description: String(source.description ?? '').trim() || builtinFallback?.description || '',
     url,
     headers: normalizeMcpHeaders(source.headers),
     apiKey: String(source.apiKey ?? '').trim(),
     apiKeyHeader: normalizeMcpApiKeyHeader(source.apiKeyHeader),
     apiKeyPrefix: String(source.apiKeyPrefix ?? 'Bearer ').replace(/[\r\n]/g, ''),
     enabled: source.enabled !== false,
-    globalEnabled: source.globalEnabled ?? fallback?.globalEnabled ?? false,
+    globalEnabled: source.globalEnabled ?? builtinFallback?.globalEnabled ?? false,
     toolPolicy: source.toolPolicy === 'disabled' || source.toolPolicy === 'read-only' || source.toolPolicy === 'all'
       ? source.toolPolicy
-      : fallback?.toolPolicy ?? 'all',
+      : builtinFallback?.toolPolicy ?? 'all',
     timeoutMs: Math.min(120_000, Math.max(3_000, timeoutMs)),
     tools: [...new Map(tools.map((tool) => [tool.name, tool])).values()],
-    protocolVersion: String(source.protocolVersion ?? '').trim() || fallback?.protocolVersion || '',
-    serverName: String(source.serverName ?? '').trim() || fallback?.serverName || '',
-    serverVersion: String(source.serverVersion ?? '').trim() || fallback?.serverVersion || '',
+    protocolVersion: String(source.protocolVersion ?? '').trim() || builtinFallback?.protocolVersion || '',
+    serverName: String(source.serverName ?? '').trim() || builtinFallback?.serverName || '',
+    serverVersion: String(source.serverVersion ?? '').trim() || builtinFallback?.serverVersion || '',
     lastStatus: builtin
       ? 'connected'
       : source.lastStatus === 'connected' || source.lastStatus === 'error'
         ? source.lastStatus
         : 'idle',
     lastCheckedAt: Math.max(0, Number(source.lastCheckedAt) || 0),
-    lastError: String(source.lastError ?? '').trim()
+    lastError: String(source.lastError ?? '').trim(),
+    ...(kind === 'moltbook' && source.moltbookAccountId ? { moltbookAccountId: String(source.moltbookAccountId).trim() } : {})
   };
 }
 
@@ -347,11 +344,9 @@ export function normalizeMcpSettings(settings?: Partial<McpSettings> | null): Mc
     ? settings.servers.map(normalizeMcpServer).filter((server): server is McpServerConfig => Boolean(server))
     : [];
   const realityServer = normalizedServers.find((server) => server.kind === 'reality') ?? fallback.servers[0];
-  const notificationInboxServer = normalizedServers.find((server) => server.kind === 'notification-inbox') ?? fallback.servers[1];
   const servers = [
     realityServer,
-    notificationInboxServer,
-    ...normalizedServers.filter((server) => server.kind !== 'reality' && server.kind !== 'notification-inbox')
+    ...normalizedServers.filter((server) => server.kind !== 'reality')
   ];
   return {
     enabled: settings?.enabled !== false,

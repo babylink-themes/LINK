@@ -12,7 +12,7 @@ import { Readability } from '@mozilla/readability';
 import type { AppSettings, McpServerConfig, RealityRecurrenceRule } from '@/types/domain';
 import { createActiveTimeout, isFetchInterruptedError, waitForActiveNetworkWindow } from '@/utils/activeTimeout';
 import { synthesizeSpeech } from '@/services/tts';
-import { androidNotificationInboxAvailable, androidRealityAvailable, clearAndroidNotificationInbox, getAndroidAppUsage, getAndroidAppUsageAccess, getAndroidNotificationInbox, getAndroidNotificationInboxAccess, openAndroidAppSettings, openAndroidAppUsageSettings, openAndroidNotificationInboxSettings, openAndroidSystemWeather, setAndroidSystemAlarm } from '@/services/nativeReality';
+import { androidRealityAvailable, getAndroidAppUsage, getAndroidAppUsageAccess, openAndroidAppSettings, openAndroidAppUsageSettings, openAndroidSystemWeather, setAndroidSystemAlarm } from '@/services/nativeReality';
 
 export interface RealityMcpExecutionRequest {
   server: McpServerConfig;
@@ -29,7 +29,7 @@ export interface RealityMcpExecutionResult {
   isError: boolean;
 }
 
-export type RealityPermissionId = 'notifications' | 'calendar' | 'contacts' | 'location' | 'appUsage' | 'notificationInbox' | 'appSettings';
+export type RealityPermissionId = 'notifications' | 'calendar' | 'contacts' | 'location' | 'appUsage' | 'appSettings';
 
 export interface RealityPermissionStatus {
   id: RealityPermissionId;
@@ -161,15 +161,6 @@ async function getPermissionState() {
   } else {
     result.appUsage = 'unsupported';
   }
-  if (androidNotificationInboxAvailable()) {
-    try {
-      result.notificationInbox = (await getAndroidNotificationInboxAccess()).granted ? 'granted' : 'denied';
-    } catch {
-      result.notificationInbox = 'unknown';
-    }
-  } else {
-    result.notificationInbox = 'unsupported';
-  }
   return result;
 }
 
@@ -180,7 +171,7 @@ function normalizePermissionStatus(value: string | undefined): RealityPermission
 }
 
 export async function getRealityMcpPermissionStatus(): Promise<RealityPermissionStatus[]> {
-  const [notification, contacts, location, appUsage, notificationInbox] = await Promise.all([
+  const [notification, contacts, location, appUsage] = await Promise.all([
     nativeNotificationsAvailable()
       ? LocalNotifications.checkPermissions().then((result) => normalizePermissionStatus(result.display)).catch(() => 'unknown' as const)
       : Promise.resolve('unsupported' as const),
@@ -193,9 +184,6 @@ export async function getRealityMcpPermissionStatus(): Promise<RealityPermission
     androidRealityAvailable()
       ? getAndroidAppUsageAccess().then((result) => result.granted ? 'granted' as const : 'denied' as const).catch(() => 'unknown' as const)
       : Promise.resolve('unsupported' as const),
-    androidNotificationInboxAvailable()
-      ? getAndroidNotificationInboxAccess().then((result) => result.granted ? 'granted' as const : 'denied' as const).catch(() => 'unknown' as const)
-      : Promise.resolve('unsupported' as const)
   ]);
   return [
     { id: 'notifications', label: '系统通知', status: notification, detail: '用于发送设备通知和系统提示。', actionLabel: '授权通知' },
@@ -203,7 +191,6 @@ export async function getRealityMcpPermissionStatus(): Promise<RealityPermission
     { id: 'contacts', label: '系统通讯录', status: contacts, detail: '用于读取、选择和创建手机联系人。', actionLabel: '授权通讯录' },
     { id: 'location', label: '当前位置', status: location, detail: '用于定位、天气、地点和路线。', actionLabel: '授权位置' },
     { id: 'appUsage', label: '使用情况访问', status: appUsage, detail: 'Android 特殊权限，用于读取真实 App 使用时长。', actionLabel: '打开系统设置' },
-    { id: 'notificationInbox', label: '通知使用权', status: notificationInbox, detail: 'Android 特殊权限，用于读取系统通知摘要。', actionLabel: '打开系统设置' },
     { id: 'appSettings', label: 'BabyLink 应用权限页', status: androidRealityAvailable() ? 'available' : 'unsupported', detail: '打开 Android 系统中的 BabyLink 权限与通知设置。', actionLabel: '打开应用设置' }
   ];
 }
@@ -231,10 +218,6 @@ export async function requestRealityMcpPermission(id: RealityPermissionId) {
     const result = await openAndroidAppUsageSettings();
     return { permission: id, ...result, awaitingUser: !result.granted };
   }
-  if (id === 'notificationInbox') {
-    const result = await openAndroidNotificationInboxSettings();
-    return { permission: id, ...result, awaitingUser: !result.granted };
-  }
   const result = await openAndroidAppSettings();
   return { permission: id, ...result, awaitingUser: true };
 }
@@ -245,54 +228,6 @@ export async function requestAllRealityMcpPermissions() {
   return results.map((result, index) => result.status === 'fulfilled'
     ? result.value
     : { permission: permissionIds[index], granted: false, error: result.reason instanceof Error ? result.reason.message : '系统没有完成授权。' });
-}
-
-function appUsageCategory(packageName: string, appName: string) {
-  const source = `${packageName} ${appName}`.toLowerCase();
-  if (/(wechat|weixin|qq|telegram|whatsapp|discord|messages|短信|微信)/.test(source)) return 'communication';
-  if (/(bilibili|douyin|tiktok|youtube|netflix|music|video|网易云|抖音|哔哩)/.test(source)) return 'entertainment';
-  if (/(reader|kindle|duolingo|dictionary|notion|office|docs|学习|阅读)/.test(source)) return 'learning-productivity';
-  if (/(taobao|tmall|jd|pinduoduo|shopping|淘宝|京东|拼多多)/.test(source)) return 'shopping';
-  if (/(map|amap|maps|travel|高德|地图)/.test(source)) return 'travel';
-  return 'other';
-}
-
-function clipboardAnalysis(value: string) {
-  const text = value.trim();
-  const urls = [...text.matchAll(/https?:\/\/[^\s<>"']+/gi)].map((match) => match[0].replace(/[),，。]+$/g, '')).slice(0, 10);
-  const bvid = text.match(/\b(BV[0-9A-Za-z]{8,})\b/)?.[1] ?? '';
-  const taoCode = text.match(/(?:￥|¥)[^￥¥\n]{4,80}(?:￥|¥)/)?.[0] ?? '';
-  const addressLike = /(?:省|市|区|县|镇|街道|路|街|巷|号|大厦|广场|小区)/.test(text) && text.length <= 300;
-  const platform = urls.some((url) => /bilibili\.com|b23\.tv/i.test(url)) || bvid
-    ? 'bilibili'
-    : urls.some((url) => /xiaohongshu\.com|xhslink\.com/i.test(url))
-      ? 'xiaohongshu'
-      : urls.some((url) => /douyin\.com|iesdouyin\.com/i.test(url))
-        ? 'douyin'
-        : urls.some((url) => /taobao\.com|tmall\.com|tb\.cn/i.test(url)) || taoCode
-          ? 'taobao'
-          : '';
-  const kind = taoCode ? 'tao-code' : bvid ? 'video' : urls.length ? 'link' : addressLike ? 'address' : 'text';
-  const suggestedTools = kind === 'address'
-    ? ['search_nearby_places', 'open_map_route']
-    : platform === 'bilibili'
-      ? ['search_bilibili', 'get_bilibili_video']
-      : platform === 'xiaohongshu'
-        ? ['xhs__search_feeds']
-        : platform === 'douyin'
-          ? ['douyin-search MCP']
-          : platform === 'taobao'
-            ? ['taobao-search MCP', 'add_price_track']
-            : urls.length ? ['read_web_page'] : [];
-  return { kind, platform, urls, bvid, taoCode, addressLike, suggestedTools };
-}
-
-async function compositeRealitySource(request: RealityMcpExecutionRequest, toolName: string, args: Record<string, unknown>) {
-  try {
-    return { ok: true, data: JSON.parse(await executeRealityTool({ ...request, toolName, args })) as unknown };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : '能力暂不可用。' };
-  }
 }
 
 async function ensureNotificationPermission() {
@@ -807,24 +742,6 @@ async function executeRealityTool(request: RealityMcpExecutionRequest): Promise<
     });
   }
 
-  if (toolName === 'get_app_usage_access') {
-    const access = await getAndroidAppUsageAccess();
-    return JSON.stringify({
-      ...access,
-      supported: access.platform === 'android',
-      actionRequired: access.platform === 'android' && !access.granted
-    });
-  }
-
-  if (toolName === 'request_app_usage_access') {
-    const result = await openAndroidAppUsageSettings();
-    return JSON.stringify({
-      ...result,
-      systemSettings: 'usage-access',
-      note: '请在系统页面允许 BabyLink，返回后再次调用读取工具。'
-    });
-  }
-
   if (toolName === 'get_app_usage') {
     const date = textArg(args, 'date');
     const parsedTo = Date.parse(textArg(args, 'to'));
@@ -856,128 +773,6 @@ async function executeRealityTool(request: RealityMcpExecutionRequest): Promise<
         lastUsedAt: app.lastUsedAt ? new Date(app.lastUsedAt).toISOString() : ''
       }))
     });
-  }
-
-  if (toolName === 'get_app_usage_report') {
-    const days = Math.min(31, Math.max(1, Math.round(numberArg(args, 'days') ?? 7)));
-    const { from, to } = localCalendarRange(days);
-    const result = await getAndroidAppUsage({ from, to, limit: 200 });
-    const focusThresholdMinutes = Math.min(1440, Math.max(15, Math.round(numberArg(args, 'focusThresholdMinutes') ?? 120)));
-    const categories = new Map<string, number>();
-    for (const app of result.apps) {
-      const category = appUsageCategory(app.packageName, app.appName);
-      categories.set(category, (categories.get(category) ?? 0) + app.foregroundMs);
-    }
-    return JSON.stringify({
-      ...result,
-      days,
-      totalMinutes: Math.round(result.totalForegroundMs / 60_000),
-      dailyAverageMinutes: Math.round(result.totalForegroundMs / 60_000 / days),
-      categories: [...categories.entries()].map(([category, foregroundMs]) => ({ category, minutes: Math.round(foregroundMs / 60_000) })).sort((left, right) => right.minutes - left.minutes),
-      topApps: result.apps.slice(0, 10).map((app) => ({ ...app, foregroundMinutes: Math.round(app.foregroundMs / 60_000) })),
-      focusAlerts: result.apps.filter((app) => app.foregroundMs >= focusThresholdMinutes * 60_000).map((app) => ({ appName: app.appName, packageName: app.packageName, minutes: Math.round(app.foregroundMs / 60_000), thresholdMinutes: focusThresholdMinutes })),
-      permissionActionRequired: !result.permissionGranted
-    });
-  }
-
-  if (toolName === 'get_notification_inbox_access') {
-    const access = await getAndroidNotificationInboxAccess();
-    return JSON.stringify({ ...access, supported: access.platform === 'android', actionRequired: access.platform === 'android' && !access.granted });
-  }
-
-  if (toolName === 'request_notification_inbox_access') {
-    const result = await openAndroidNotificationInboxSettings();
-    return JSON.stringify({ ...result, systemSettings: 'notification-listener', note: '请在系统页面亲自允许 BabyLink，返回后再次读取。' });
-  }
-
-  if (toolName === 'get_notification_inbox') {
-    const days = Math.min(7, Math.max(1, Math.round(numberArg(args, 'days') ?? 1)));
-    const category = textArg(args, 'category');
-    const result = await getAndroidNotificationInbox({
-      from: Date.now() - days * 24 * 60 * 60_000,
-      limit: Math.min(200, Math.max(1, Math.round(numberArg(args, 'limit') ?? 50))),
-      category
-    });
-    return JSON.stringify({
-      ...result,
-      days,
-      actionRequired: !result.granted,
-      entries: result.entries.map((entry) => ({ ...entry, postedAtText: formatDate(entry.postedAt) }))
-    });
-  }
-
-  if (toolName === 'clear_notification_inbox') {
-    if (!confirmRealityAction('是否清空 BabyLink 保存在本机的全部通知摘要？此操作不可撤销。')) return JSON.stringify({ approved: false, cleared: false });
-    return JSON.stringify({ approved: true, ...(await clearAndroidNotificationInbox()) });
-  }
-
-  if (toolName === 'prepare_date_plan' || toolName === 'prepare_watch_together') {
-    const from = Number.isFinite(Date.parse(textArg(args, 'from'))) ? Date.parse(textArg(args, 'from')) : Date.now();
-    const to = Number.isFinite(Date.parse(textArg(args, 'to'))) ? Date.parse(textArg(args, 'to')) : from + 7 * 24 * 60 * 60_000;
-    if (from < Date.now()) throw new Error('规划开始时间不能早于当前现实时间。');
-    const durationMinutes = Math.min(toolName === 'prepare_watch_together' ? 480 : 1440, Math.max(15, Math.round(numberArg(args, 'durationMinutes') ?? (toolName === 'prepare_watch_together' ? 90 : 120))));
-    const [weather, location, freeTime] = await Promise.all([
-      compositeRealitySource(request, 'get_weather', { hourlyLimit: 24 }),
-      compositeRealitySource(request, 'get_current_location', {}),
-      compositeRealitySource(request, 'find_calendar_free_time', { from: new Date(from).toISOString(), to: new Date(to).toISOString(), durationMinutes, limit: 8 })
-    ]);
-    return JSON.stringify({ workflow: toolName === 'prepare_watch_together' ? 'watch-together' : 'date-plan', from, to, durationMinutes, weather, location, freeTime, nextTools: toolName === 'prepare_watch_together' ? ['search_bilibili', 'search_web', 'create_calendar_event'] : ['search_places', 'get_route', 'create_calendar_event'] });
-  }
-
-  if (toolName === 'prepare_trip_plan') {
-    const from = Number.isFinite(Date.parse(textArg(args, 'from'))) ? Date.parse(textArg(args, 'from')) : Date.now();
-    const to = Number.isFinite(Date.parse(textArg(args, 'to'))) ? Date.parse(textArg(args, 'to')) : from + 3 * 24 * 60 * 60_000;
-    if (from < Date.now()) throw new Error('旅行开始时间不能早于当前现实时间。');
-    const [weather, location, calendar] = await Promise.all([
-      compositeRealitySource(request, 'get_weather', { hourlyLimit: 72 }),
-      compositeRealitySource(request, 'get_current_location', {}),
-      compositeRealitySource(request, 'get_calendar_events', { from: new Date(from).toISOString(), to: new Date(to).toISOString() })
-    ]);
-    return JSON.stringify({ workflow: 'trip-plan', from, to, weather, location, calendar, nextTools: ['search_places', 'get_route', 'set_reminder', 'create_calendar_event'] });
-  }
-
-  if (toolName === 'prepare_shopping_plan') {
-    const query = textArg(args, 'query');
-    if (!query) throw new Error('购物关键词不能为空。');
-    const clipboard = await compositeRealitySource(request, 'analyze_clipboard', {});
-    return JSON.stringify({
-      workflow: 'shopping-plan',
-      query,
-      budget: numberArg(args, 'budget') ?? null,
-      targetPrice: numberArg(args, 'targetPrice') ?? null,
-      clipboard,
-      nextTools: ['search_taobao_products', 'recommend_taobao_products', 'xhs__search_feeds', 'search_web', 'add_price_track'],
-      safety: '只搜索、比较和追踪价格，不会自动下单或支付。'
-    });
-  }
-
-  if (toolName === 'prepare_study_session') {
-    const days = Math.min(31, Math.max(1, Math.round(numberArg(args, 'days') ?? 7)));
-    const [usage, reminders] = await Promise.all([
-      compositeRealitySource(request, 'get_app_usage_report', { days }),
-      compositeRealitySource(request, 'list_reminders', { includeExpired: false, includeCompleted: false })
-    ]);
-    return JSON.stringify({ workflow: 'study-session', usage, reminders, nextTools: ['search_music', 'add_music_to_queue', 'set_reminder', 'notify_user'] });
-  }
-
-  if (toolName === 'get_nightly_brief') {
-    const now = Date.now();
-    const tomorrow = now + 36 * 60 * 60_000;
-    const [weather, calendar, reminders, notifications, usage] = await Promise.all([
-      compositeRealitySource(request, 'get_weather', { hourlyLimit: 36 }),
-      compositeRealitySource(request, 'get_calendar_events', { from: new Date(now).toISOString(), to: new Date(tomorrow).toISOString() }),
-      compositeRealitySource(request, 'list_reminders', { from: new Date(now).toISOString(), to: new Date(tomorrow).toISOString(), includeExpired: false }),
-      compositeRealitySource(request, 'get_notification_inbox', { days: 1, limit: 80 }),
-      compositeRealitySource(request, 'get_app_usage_report', { days: 1 })
-    ]);
-    return JSON.stringify({ workflow: 'nightly-brief', generatedAt: now, weather, calendar, reminders, notifications, usage, nextTools: ['list_price_tracks', 'track_delivery'], privacy: '仅包含系统已授权且保存在当前设备的数据。' });
-  }
-
-  if (toolName === 'set_cooking_timer') {
-    const label = textArg(args, 'label');
-    const minutes = Math.min(1440, Math.max(1, Math.round(numberArg(args, 'minutes') ?? 0)));
-    if (!label || !numberArg(args, 'minutes')) throw new Error('烹饪步骤和计时分钟数不能为空。');
-    return await executeRealityTool({ ...request, toolName: 'set_reminder', args: { title: `烹饪计时：${label}`, body: `${label} 已计时 ${minutes} 分钟。`, delayMinutes: minutes } });
   }
 
   if (toolName === 'add_music_to_queue') {
@@ -1107,109 +902,6 @@ async function executeRealityTool(request: RealityMcpExecutionRequest): Promise<
     return JSON.stringify({ completed: true, systemApp: Capacitor.getPlatform() === 'ios' ? 'reminders' : 'calendar', reminders });
   }
 
-  if (toolName === 'update_reminder') {
-    const reminderId = textArg(args, 'reminderId');
-    if (!reminderId) throw new Error('提醒 ID 不能为空。');
-    const delayMinutes = numberArg(args, 'delayMinutes');
-    const parsedAt = Date.parse(textArg(args, 'at'));
-    await ensureRemindersPermission();
-    if (Capacitor.getPlatform() === 'ios') {
-      const existing = (await CapacitorCalendar.getReminderById({ id: reminderId })).result;
-      if (!existing) throw new Error('系统提醒事项中没有找到这个提醒。');
-      const candidateAt = delayMinutes !== undefined
-        ? Date.now() + Math.max(1, delayMinutes) * 60_000
-        : hasArg(args, 'at') ? parsedAt : existing.dueDate ?? existing.startDate;
-      const at = Number(candidateAt);
-      if (!Number.isFinite(at) || at <= Date.now()) throw new Error('提醒时间必须是未来时间。');
-      const title = hasArg(args, 'title') ? textArg(args, 'title') : String(existing.title ?? '');
-      if (!title) throw new Error('提醒标题不能为空。');
-      await CapacitorCalendar.modifyReminder({
-        id: reminderId,
-        title,
-        notes: hasArg(args, 'body') ? textArg(args, 'body') : String(existing.notes ?? ''),
-        startDate: at,
-        dueDate: at,
-        ...(hasArg(args, 'repeat') ? { recurrence: reminderRecurrence(parseRecurrence(args)) } : {})
-      });
-      return JSON.stringify({ completed: true, updated: true, systemApp: 'reminders', reminderId, receipt: reminderId, title, at, atText: formatDate(at) });
-    }
-    const existing = await findSystemCalendarEvent(reminderId);
-    if (!existing || !isSystemReminderEvent(existing)) throw new Error('系统日历中没有找到这个提醒。');
-    const at = delayMinutes !== undefined
-      ? Date.now() + Math.max(1, delayMinutes) * 60_000
-      : hasArg(args, 'at') ? parsedAt : existing.startDate;
-    if (!Number.isFinite(at) || at <= Date.now()) throw new Error('提醒时间必须是未来时间。');
-    const title = hasArg(args, 'title') ? textArg(args, 'title') : existing.title;
-    if (!title) throw new Error('提醒标题不能为空。');
-    const body = hasArg(args, 'body') ? textArg(args, 'body') : String(existing.description ?? '').replace(systemReminderMarker, '').trim();
-    await CapacitorCalendar.modifyEvent({
-      id: reminderId,
-      title,
-      startDate: at,
-      endDate: at + Math.max(60_000, existing.endDate - existing.startDate),
-      description: systemReminderNotes(body),
-      ...(hasArg(args, 'repeat') && parseRecurrence(args) ? { recurrence: calendarRecurrence(parseRecurrence(args)) } : {})
-    });
-    return JSON.stringify({ completed: true, updated: true, systemApp: 'calendar', reminderId, receipt: reminderId, title, at, atText: formatDate(at) });
-  }
-
-  if (toolName === 'complete_reminder') {
-    const reminderId = textArg(args, 'reminderId');
-    if (!reminderId) throw new Error('提醒 ID 不能为空。');
-    await ensureRemindersPermission();
-    if (Capacitor.getPlatform() === 'ios') {
-      const existing = (await CapacitorCalendar.getReminderById({ id: reminderId })).result;
-      if (!existing) throw new Error('系统提醒事项中没有找到这个提醒。');
-      const completedAt = Date.now();
-      await CapacitorCalendar.modifyReminder({ id: reminderId, isCompleted: true, completionDate: completedAt });
-      return JSON.stringify({ completed: true, systemApp: 'reminders', reminderId, receipt: reminderId, completedAt, completedAtText: formatDate(completedAt) });
-    }
-    const existing = await findSystemCalendarEvent(reminderId);
-    if (!existing || !isSystemReminderEvent(existing)) throw new Error('系统日历中没有找到这个提醒。');
-    await CapacitorCalendar.deleteEvent({ id: reminderId });
-    return JSON.stringify({ completed: true, systemApp: 'calendar', reminderId, receipt: reminderId, removedFromCalendar: true });
-  }
-
-  if (toolName === 'snooze_reminder') {
-    const reminderId = textArg(args, 'reminderId');
-    if (!reminderId) throw new Error('提醒 ID 不能为空。');
-    const parsedAt = Date.parse(textArg(args, 'at'));
-    const delayMinutes = Math.max(1, numberArg(args, 'delayMinutes') ?? 10);
-    const at = hasArg(args, 'at') ? parsedAt : Date.now() + delayMinutes * 60_000;
-    if (!Number.isFinite(at) || at <= Date.now()) throw new Error('稍后提醒时间必须是未来时间。');
-    await ensureRemindersPermission();
-    if (Capacitor.getPlatform() === 'ios') {
-      const existing = (await CapacitorCalendar.getReminderById({ id: reminderId })).result;
-      if (!existing) throw new Error('系统提醒事项中没有找到这个提醒。');
-      await CapacitorCalendar.modifyReminder({ id: reminderId, isCompleted: false, startDate: at, dueDate: at });
-      return JSON.stringify({ completed: true, snoozed: true, systemApp: 'reminders', reminderId, receipt: reminderId, at, atText: formatDate(at) });
-    }
-    const existing = await findSystemCalendarEvent(reminderId);
-    if (!existing || !isSystemReminderEvent(existing)) throw new Error('系统日历中没有找到这个提醒。');
-    await CapacitorCalendar.modifyEvent({
-      id: reminderId,
-      startDate: at,
-      endDate: at + Math.max(60_000, existing.endDate - existing.startDate)
-    });
-    return JSON.stringify({ completed: true, snoozed: true, systemApp: 'calendar', reminderId, receipt: reminderId, at, atText: formatDate(at) });
-  }
-
-  if (toolName === 'cancel_reminder') {
-    const reminderId = textArg(args, 'reminderId');
-    if (!reminderId) throw new Error('提醒 ID 不能为空。');
-    await ensureRemindersPermission();
-    if (Capacitor.getPlatform() === 'ios') {
-      const existing = (await CapacitorCalendar.getReminderById({ id: reminderId })).result;
-      if (!existing) throw new Error('系统提醒事项中没有找到这个提醒。');
-      await CapacitorCalendar.deleteReminder({ id: reminderId });
-      return JSON.stringify({ completed: true, cancelled: true, systemApp: 'reminders', reminderId, receipt: reminderId });
-    }
-    const existing = await findSystemCalendarEvent(reminderId);
-    if (!existing || !isSystemReminderEvent(existing)) throw new Error('系统日历中没有找到这个提醒。');
-    await CapacitorCalendar.deleteEvent({ id: reminderId });
-    return JSON.stringify({ completed: true, cancelled: true, systemApp: 'calendar', reminderId, receipt: reminderId });
-  }
-
   if (toolName === 'create_calendar_event') {
     const title = textArg(args, 'title');
     const startDate = Date.parse(textArg(args, 'startAt'));
@@ -1277,119 +969,6 @@ async function executeRealityTool(request: RealityMcpExecutionRequest): Promise<
     });
   }
 
-  if (toolName === 'update_calendar_event') {
-    const eventId = textArg(args, 'eventId');
-    if (!eventId) throw new Error('日程 ID 不能为空。');
-    const changedKeys = ['title', 'startAt', 'endAt', 'location', 'notes', 'isAllDay', 'repeat'];
-    if (!changedKeys.some((key) => hasArg(args, key))) throw new Error('至少需要提供一项日程修改内容。');
-    const existing = await findSystemCalendarEvent(eventId);
-    if (!existing) throw new Error('系统日历中没有找到这个日程。');
-    const title = hasArg(args, 'title') ? textArg(args, 'title') : existing.title;
-    if (hasArg(args, 'title') && !title) throw new Error('日程标题不能为空。');
-    const parsedStartAt = Date.parse(textArg(args, 'startAt'));
-    const parsedEndAt = Date.parse(textArg(args, 'endAt'));
-    const startAt = hasArg(args, 'startAt') ? parsedStartAt : existing.startDate;
-    const endAt = hasArg(args, 'endAt') ? parsedEndAt : existing.endDate;
-    if (hasArg(args, 'startAt') && !Number.isFinite(startAt)) throw new Error('日程开始时间无效。');
-    if (hasArg(args, 'endAt') && !Number.isFinite(endAt)) throw new Error('日程结束时间无效。');
-    if (startAt !== undefined && endAt !== undefined && endAt <= startAt) throw new Error('日程结束时间必须晚于开始时间。');
-    const recurrence = parseRecurrence(args);
-    if (recurrence?.endAt && startAt !== undefined && recurrence.endAt <= startAt) throw new Error('日程重复结束时间必须晚于开始时间。');
-    const nextIsAllDay = hasArg(args, 'isAllDay') ? booleanArg(args, 'isAllDay') : existing.isAllDay;
-    if (hasArg(args, 'startAt') && startAt !== undefined && calendarStartIsInPast(startAt, nextIsAllDay)) {
-      throw new Error('日程开始时间不能早于当前现实时间，请使用未来日期。');
-    }
-    await ensureCalendarPermission(false);
-    if (hasArg(args, 'repeat') && !recurrence) {
-      await CapacitorCalendar.deleteEvent({ id: eventId });
-      const recreated = await CapacitorCalendar.createEvent({
-        title,
-        startDate: startAt,
-        endDate: endAt,
-        location: hasArg(args, 'location') ? textArg(args, 'location') : String(existing.location ?? ''),
-        description: hasArg(args, 'notes') ? textArg(args, 'notes') : String(existing.description ?? ''),
-        isAllDay: nextIsAllDay,
-        alerts: existing.alerts
-      });
-      const systemEventId = String(recreated.id ?? '').trim();
-      if (!systemEventId) throw new Error('系统日历没有返回重建日程的事件 ID。');
-      return JSON.stringify({ completed: true, updated: true, eventId: systemEventId, systemEventId, receipt: systemEventId, recurrence: null });
-    } else {
-      const options: ModifyEventOptions = { id: eventId };
-      if (title !== undefined) options.title = title;
-      if (startAt !== undefined && hasArg(args, 'startAt')) options.startDate = startAt;
-      if (endAt !== undefined && hasArg(args, 'endAt')) options.endDate = endAt;
-      if (hasArg(args, 'location')) options.location = textArg(args, 'location');
-      if (hasArg(args, 'notes')) options.description = textArg(args, 'notes');
-      if (hasArg(args, 'isAllDay')) options.isAllDay = booleanArg(args, 'isAllDay');
-      if (hasArg(args, 'repeat') && recurrence) options.recurrence = calendarRecurrence(recurrence);
-      await CapacitorCalendar.modifyEvent(options);
-    }
-    return JSON.stringify({ completed: true, updated: true, eventId, systemEventId: eventId, receipt: eventId, recurrence: hasArg(args, 'repeat') ? recurrence : undefined });
-  }
-
-  if (toolName === 'delete_calendar_event') {
-    const eventId = textArg(args, 'eventId');
-    if (!eventId) throw new Error('日程 ID 不能为空。');
-    await ensureCalendarPermission(false);
-    const existing = await findSystemCalendarEvent(eventId);
-    if (!existing) throw new Error('系统日历中没有找到这个日程。');
-    await CapacitorCalendar.deleteEvent({ id: eventId });
-    return JSON.stringify({ completed: true, deleted: true, eventId, systemEventId: eventId, receipt: eventId });
-  }
-
-  if (toolName === 'check_calendar_conflicts') {
-    const startAt = Date.parse(textArg(args, 'startAt'));
-    const endAt = Date.parse(textArg(args, 'endAt'));
-    if (!Number.isFinite(startAt) || !Number.isFinite(endAt) || endAt <= startAt) throw new Error('冲突检查时间范围无效。');
-    await ensureCalendarPermission(false);
-    const result = await CapacitorCalendar.listEventsInRange({ from: startAt, to: endAt });
-    const excludeEventId = textArg(args, 'excludeEventId');
-    const conflicts = result.result.filter((event) => event.id !== excludeEventId && event.startDate < endAt && event.endDate > startAt);
-    return JSON.stringify({
-      hasConflict: conflicts.length > 0,
-      startAt,
-      endAt,
-      conflicts: conflicts.map((event) => ({
-        id: event.id,
-        title: event.title,
-        startAt: event.startDate,
-        startAtText: formatDate(event.startDate),
-        endAt: event.endDate,
-        endAtText: formatDate(event.endDate),
-        location: event.location
-      }))
-    });
-  }
-
-  if (toolName === 'find_calendar_free_time') {
-    const from = Date.parse(textArg(args, 'from'));
-    const to = Date.parse(textArg(args, 'to'));
-    const durationMinutes = Math.round(numberArg(args, 'durationMinutes') ?? 0);
-    const limit = Math.min(20, Math.max(1, Math.round(numberArg(args, 'limit') ?? 8)));
-    if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from || to > from + 31 * 24 * 60 * 60_000) throw new Error('空闲时间查询范围无效或超过 31 天。');
-    if (durationMinutes < 1 || durationMinutes > 1440) throw new Error('所需空闲时长必须在 1 到 1440 分钟之间。');
-    await ensureCalendarPermission(false);
-    const result = await CapacitorCalendar.listEventsInRange({ from, to });
-    const busy = result.result
-      .map((event) => ({ start: Math.max(from, event.startDate), end: Math.min(to, event.endDate) }))
-      .filter((slot) => slot.end > slot.start)
-      .sort((left, right) => left.start - right.start);
-    const free: Array<{ startAt: number; startAtText: string; endAt: number; endAtText: string; durationMinutes: number }> = [];
-    const requiredDuration = durationMinutes * 60_000;
-    let cursor = from;
-    for (const slot of busy) {
-      if (slot.start - cursor >= requiredDuration && free.length < limit) {
-        free.push({ startAt: cursor, startAtText: formatDate(cursor), endAt: slot.start, endAtText: formatDate(slot.start), durationMinutes: Math.floor((slot.start - cursor) / 60_000) });
-      }
-      cursor = Math.max(cursor, slot.end);
-    }
-    if (to - cursor >= requiredDuration && free.length < limit) {
-      free.push({ startAt: cursor, startAtText: formatDate(cursor), endAt: to, endAtText: formatDate(to), durationMinutes: Math.floor((to - cursor) / 60_000) });
-    }
-    return JSON.stringify({ from, to, requestedDurationMinutes: durationMinutes, free });
-  }
-
   if (toolName === 'create_memo') {
     const content = textArg(args, 'content');
     if (!content) throw new Error('备忘录正文不能为空。');
@@ -1400,10 +979,6 @@ async function executeRealityTool(request: RealityMcpExecutionRequest): Promise<
     }
     await Share.share({ title, text: content, dialogTitle: '选择本机备忘录 App 保存' });
     return JSON.stringify({ initiated: true, awaitingUser: true, systemApp: 'share-sheet', title, content, note: '请选择手机中的备忘录或笔记 App 并在该 App 内完成保存；BabyLink 不保存此备忘录副本。' });
-  }
-
-  if (toolName === 'list_memos') {
-    return JSON.stringify({ unsupported: true, completed: false, reason: 'Android 和 iOS 没有可读取所有第三方备忘录 App 的通用系统接口。请直接在目标备忘录 App 中查看；BabyLink 不再保存备忘录副本。' });
   }
 
   if (toolName === 'pick_contact') {
@@ -1505,16 +1080,6 @@ async function executeRealityTool(request: RealityMcpExecutionRequest): Promise<
     const textLike = !result.type || result.type.startsWith('text/') || /^(?:https?:\/\/|mailto:|tel:)/i.test(value);
     if (!textLike) throw new Error('剪贴板中不是文本或链接。');
     return JSON.stringify({ approved: true, read: true, type: result.type, value: value.slice(0, 100_000), truncated: value.length > 100_000 });
-  }
-
-  if (toolName === 'analyze_clipboard') {
-    const reason = textArg(args, 'reason', '识别链接、地址或平台分享文本并建议下一步');
-    const approved = confirmRealityAction(`BabyLink 请求读取并识别剪贴板。\n\n用途：${reason}\n\n是否允许本次读取？`);
-    if (!approved) return JSON.stringify({ approved: false, read: false });
-    const result = await Clipboard.read();
-    const value = String(result.value ?? '').slice(0, 100_000);
-    if (!value.trim()) return JSON.stringify({ approved: true, read: true, empty: true });
-    return JSON.stringify({ approved: true, read: true, preview: value.slice(0, 500), ...clipboardAnalysis(value) });
   }
 
   if (toolName === 'write_clipboard_text') {
@@ -1629,19 +1194,6 @@ async function executeRealityTool(request: RealityMcpExecutionRequest): Promise<
     return JSON.stringify({ ...(await openExternalUrl(endpoint)), systemApp: 'maps', query, limitation: '地图搜索结果只显示在系统地图 App 中，BabyLink 无权读取其私有页面。' });
   }
 
-  if (toolName === 'open_map_route') {
-    const destination = textArg(args, 'destination');
-    if (!destination) throw new Error('目的地不能为空。');
-    const latitude = numberArg(args, 'latitude');
-    const longitude = numberArg(args, 'longitude');
-    if (!Capacitor.isNativePlatform()) throw new Error('系统地图路线仅能在 Android 或 iOS App 中打开。');
-    const target = latitude !== undefined && longitude !== undefined ? `${latitude},${longitude}` : destination;
-    const endpoint = Capacitor.getPlatform() === 'ios'
-      ? `maps://?daddr=${encodeURIComponent(target)}&dirflg=d`
-      : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(target)}`;
-    return JSON.stringify({ ...(await openExternalUrl(endpoint)), systemApp: 'maps', destination });
-  }
-
   if (toolName === 'get_live_news') {
     const query = textArg(args, 'query', '最新新闻');
     const limit = Math.min(20, Math.max(1, Math.round(numberArg(args, 'limit') ?? 10)));
@@ -1698,22 +1250,6 @@ async function executeRealityTool(request: RealityMcpExecutionRequest): Promise<
     });
   }
 
-  if (toolName === 'open_amap') {
-    const action = textArg(args, 'action', 'search');
-    const keyword = textArg(args, 'keyword');
-    if (!keyword) throw new Error('高德地图地点或搜索词不能为空。');
-    const latitude = numberArg(args, 'latitude');
-    const longitude = numberArg(args, 'longitude');
-    const routeCoordinates = latitude !== undefined && longitude !== undefined ? `&dlat=${latitude}&dlon=${longitude}` : '';
-    const searchCoordinates = latitude !== undefined && longitude !== undefined ? `&lat=${latitude}&lon=${longitude}` : '';
-    const scheme = Capacitor.getPlatform() === 'ios' ? 'iosamap:' : 'androidamap:';
-    const url = action === 'route'
-      ? `${scheme}//path?sourceApplication=BabyLink&dname=${encodeURIComponent(keyword)}${routeCoordinates}&dev=0&t=0`
-      : `${scheme}//poi?sourceApplication=BabyLink&name=${encodeURIComponent(keyword)}${searchCoordinates}&dev=0`;
-    const fallback = `https://uri.amap.com/search?keyword=${encodeURIComponent(keyword)}&src=BabyLink`;
-    return JSON.stringify({ ...(await openExternalUrl(url, fallback)), app: 'amap', action, keyword });
-  }
-
   if (toolName === 'open_mobile_app') {
     const app = textArg(args, 'app');
     const query = textArg(args, 'query');
@@ -1733,7 +1269,6 @@ async function executeRealityTool(request: RealityMcpExecutionRequest): Promise<
       return JSON.stringify({ ...(await openExternalUrl('app-settings:')), systemApp: 'settings' });
     }
     const targets: Record<string, { url: string; fallback?: string }> = {
-      amap: { url: `${Capacitor.getPlatform() === 'ios' ? 'iosamap' : 'androidamap'}://poi?sourceApplication=BabyLink&name=${encodeURIComponent(query)}`, fallback: `https://uri.amap.com/search?keyword=${encodeURIComponent(query)}&src=BabyLink` },
       taobao: { url: `taobao://s.taobao.com/?q=${encodeURIComponent(query)}`, fallback: `https://s.taobao.com/search?q=${encodeURIComponent(query)}` },
       douyin: { url: `snssdk1128://search?keyword=${encodeURIComponent(query)}`, fallback: `https://www.douyin.com/search/${encodeURIComponent(query)}` },
       netease_music: { url: `orpheus://search?keyword=${encodeURIComponent(query)}`, fallback: `https://music.163.com/#/search/m/?s=${encodeURIComponent(query)}` },
@@ -1743,26 +1278,6 @@ async function executeRealityTool(request: RealityMcpExecutionRequest): Promise<
     const target = targets[app];
     if (!target) throw new Error('不支持这个手机软件。');
     return JSON.stringify({ ...(await openExternalUrl(target.url, target.fallback)), app, query });
-  }
-
-  if (toolName === 'open_real_world_service') {
-    const service = textArg(args, 'service');
-    const value = textArg(args, 'value');
-    if (service === 'maps') {
-      if (!Capacitor.isNativePlatform()) throw new Error('系统地图仅能在 Android 或 iOS App 中打开。');
-      const endpoint = Capacitor.getPlatform() === 'ios' ? `maps://?q=${encodeURIComponent(value)}` : `geo:0,0?q=${encodeURIComponent(value)}`;
-      return JSON.stringify({ ...(await openExternalUrl(endpoint)), systemApp: 'maps' });
-    }
-    const urls: Record<string, string> = {
-      phone: `tel:${encodeURIComponent(value)}`,
-      sms: `sms:${encodeURIComponent(value)}`,
-      email: `mailto:${encodeURIComponent(value)}`,
-      qq: `mqqapi://card/show_pslcard?src_type=internal&version=1&uin=${encodeURIComponent(value)}`,
-      xiaohongshu: `xhsdiscover://search/result?keyword=${encodeURIComponent(value)}`
-    };
-    const url = urls[service];
-    if (!url) throw new Error('不支持的现实服务。');
-    return JSON.stringify(await openExternalUrl(url));
   }
 
   throw new Error(`Reality MCP 不支持工具：${toolName}`);

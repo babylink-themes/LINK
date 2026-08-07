@@ -57,7 +57,7 @@
 
           <AppModal v-model="accountFormOpen" title="绑定角色账号" eyebrow="ROLE ACCOUNT · WRITE WITH APPROVAL" variant="ins">
           <form class="operation-form account-form" @submit.prevent="createAccount">
-            <label>平台<select v-model="accountForm.platform" @change="syncAccountServer"><option value="xiaohongshu">小红书</option><option value="douyin">抖音</option><option value="qq">QQ</option><option value="system-share">系统分享</option></select></label>
+            <label>平台<select v-model="accountForm.platform" @change="syncAccountServer"><option value="xiaohongshu">小红书</option><option value="douyin">抖音</option><option value="qq">QQ</option><option value="moltbook">Moltbook</option><option value="system-share">系统分享</option></select></label>
             <label>账号展示名<input v-model.trim="accountForm.displayName" maxlength="36" placeholder="例如：阿岚的小红书" required></label>
             <label>账号 ID / 备注<input v-model.trim="accountForm.accountId" maxlength="80" placeholder="只记录展示 ID，不填写 Cookie 或密码"></label>
             <label v-if="accountForm.platform !== 'system-share'">写入连接<select v-model="accountForm.serverId" required><option value="" disabled>选择已在 MCP 中配对的连接</option><option v-for="server in currentSettings.mcpSettings.servers" :key="server.id" :value="server.id">{{ server.name }} · {{ server.lastStatus === 'connected' ? '在线' : '待检测' }}</option></select></label>
@@ -130,6 +130,17 @@
           <div v-if="selectedAudits.length" class="audit-list"><article v-for="audit in selectedAudits.slice(0, 8)" :key="audit.id"><span :class="`audit-${audit.status}`"><component :is="audit.status === 'succeeded' || audit.status === 'shared' ? CheckCircle2 : audit.status === 'failed' || audit.status === 'blocked' ? CircleAlert : Clock3" :size="15" /></span><div><strong>{{ actionLabel(audit.action) }} · {{ audit.summary }}</strong><small>{{ formatTime(audit.createdAt) }}</small></div></article></div>
           <p v-else class="empty-card">确认、阻止、执行与失败都会记录在这里，内容与令牌不会被写入审计。</p>
         </section>
+
+        <section v-show="activeTab === 'tasks'" class="operations-section moltbook-activity-pane">
+          <header class="section-heading"><div><span>MOLTBOOK OFFICIAL API</span><h2>平台活动</h2></div><button type="button" :disabled="moltbookActivityLoading" @click="loadMoltbookActivity">{{ moltbookActivityLoading ? '同步中…' : '同步活动' }}</button></header>
+          <div v-if="selectedMoltbookActivities.length" class="moltbook-activity-list">
+            <article v-for="activity in selectedMoltbookActivities.slice(0, 12)" :key="activity.id">
+              <span :class="`moltbook-activity-${activity.status}`"><component :is="moltbookActivityIcon(activity.status)" :size="15" /></span>
+              <div><strong>{{ actionLabelForMoltbook(activity.action) }} · {{ activity.summary }}</strong><small>{{ activity.target || '无目标' }} · {{ moltbookActivityStatusLabel(activity.status) }} · {{ formatTime(activity.createdAt) }}</small></div>
+            </article>
+          </div>
+          <p v-else class="empty-card">绑定 Moltbook Agent 并执行角色任务后，官方限流、内容验证和成功结果会显示在这里。</p>
+        </section>
       </template>
       <p v-else class="empty-card role-operations-empty">还没有可运营的角色。请先在 Add 页面创建或导入角色，再回来分别绑定角色自己的账号和用户自己的查询账号。</p>
     </main>
@@ -146,6 +157,7 @@ import { defaultSettings } from '@/data/seed';
 import { useAppStore } from '@/stores/appStore';
 import { useRoleOperationsStore } from '@/stores/roleOperationsStore';
 import { createDefaultRoleOperationPolicy, createRoleContentDraft, createRoleOutboundTask, executeRoleOperation, nextTaskStatusAfterApproval, operationAudit, suggestedAccountCapabilities } from '@/services/roleOperations';
+import { listMoltbookActivity, type MoltbookActivity } from '@/services/moltbook';
 import type { RoleContentDraft, RoleOperationPolicy, RoleOperationTaskStatus, RoleOutboundAction, RoleOutboundTask, RoleSocialAccount, RoleSocialPlatform } from '@/types/roleOperations';
 import { createId } from '@/utils/id';
 
@@ -157,9 +169,12 @@ const activeTab = ref<'space' | 'role' | 'user' | 'tasks'>('space');
 const accountFormOpen = ref(false);
 const runningDue = ref(false);
 const busyTaskIds = ref(new Set<string>());
+const moltbookActivities = ref<MoltbookActivity[]>([]);
+const moltbookActivityLoading = ref(false);
 const notice = ref('');
 const noticeKind = ref<'success' | 'error'>('success');
 let visibilityListener: (() => void) | null = null;
+let dueTaskTimer: number | null = null;
 
 const accountForm = reactive({ platform: 'xiaohongshu' as RoleSocialPlatform, displayName: '', accountId: '', serverId: '' });
 const composer = reactive({ accountId: '', action: 'publish' as RoleOutboundAction, title: '', body: '', linkUrl: '', recipient: '', recipientType: 'private' as RoleOutboundTask['recipientType'], conversationId: '', scheduledAt: '' });
@@ -172,22 +187,31 @@ const selectedDrafts = computed(() => selectedCharacter.value ? operations.draft
 const selectedTasks = computed(() => selectedCharacter.value ? operations.tasksForCharacter(selectedCharacter.value.id) : []);
 const characterConversations = computed(() => selectedCharacter.value ? appStore.conversations.filter((conversation) => conversation.charId === selectedCharacter.value?.id && conversation.kind !== 'group') : []);
 const selectedAudits = computed(() => selectedCharacter.value ? operations.auditsForCharacter(selectedCharacter.value.id) : []);
+const selectedMoltbookActivities = computed(() => {
+  const serverIds = new Set(selectedAccounts.value.filter((account) => account.platform === 'moltbook').map((account) => account.serverId));
+  const accountIds = new Set(currentSettings.value.mcpSettings.servers
+    .filter((server) => server.kind === 'moltbook' && serverIds.has(server.id) && server.moltbookAccountId)
+    .map((server) => server.moltbookAccountId!));
+  return moltbookActivities.value.filter((activity) => activity.characterId === selectedCharacter.value?.id || accountIds.has(activity.accountId));
+});
 const waitingTasks = computed(() => selectedTasks.value.filter((task) => !['succeeded', 'cancelled'].includes(task.status)));
 const successfulToday = computed(() => selectedAudits.value.filter((audit) => (audit.status === 'succeeded' || audit.status === 'shared') && audit.createdAt > Date.now() - 24 * 60 * 60 * 1000).length);
 const selectedComposerAccount = computed(() => selectedAccounts.value.find((account) => account.id === composer.accountId) ?? null);
 const accountHint = computed(() => accountForm.platform === 'system-share'
   ? '系统分享会在你点击执行时打开手机或浏览器分享面板，不会自动发送。'
-  : '请先在 MCP Studio 配对电脑 Bridge。这里不收集、不保存 Cookie、密码或平台令牌。');
+  : accountForm.platform === 'moltbook'
+    ? 'Moltbook API Key 由 BabyLink 服务端加密保存；这里仅记录 Agent 展示名和连接状态。'
+    : '请先在 MCP Studio 配对电脑 Bridge。这里不收集、不保存 Cookie、密码或平台令牌。');
 const availableActions = computed<RoleOutboundAction[]>(() => {
   const account = selectedComposerAccount.value;
-  if (!account) return ['publish', 'comment', 'direct-message', 'share-to-user'];
-  return account.capabilities.filter((capability): capability is RoleOutboundAction => ['like', 'publish', 'comment', 'direct-message', 'share-to-user'].includes(capability));
+  if (!account) return ['publish', 'comment', 'follow', 'create-community', 'direct-message', 'share-to-user'];
+  return account.capabilities.filter((capability): capability is RoleOutboundAction => ['like', 'publish', 'comment', 'follow', 'create-community', 'direct-message', 'share-to-user'].includes(capability));
 });
-const needsRecipient = computed(() => ['like', 'comment', 'direct-message', 'share-to-user'].includes(composer.action));
-const recipientLabel = computed(() => composer.action === 'like' || composer.action === 'comment' ? '目标内容 ID' : composer.action === 'share-to-user' && selectedComposerAccount.value?.platform === 'system-share' ? '收件人备注（可选）' : '收件人 ID');
-const recipientPlaceholder = computed(() => composer.action === 'like' || composer.action === 'comment' ? '笔记 / 视频 ID' : selectedComposerAccount.value?.platform === 'qq' ? 'QQ 号或群号' : '平台用户 ID');
-const bodyPlaceholder = computed(() => composer.action === 'publish' ? '写下角色要发布的内容…' : composer.action === 'comment' ? '写下要发表的评论…' : '写下要发送或分享的内容…');
-const queueButtonLabel = computed(() => currentPolicy.value?.approvalMode === 'always' ? '提交待确认' : composer.scheduledAt ? '加入计划队列' : '创建任务');
+const needsRecipient = computed(() => ['like', 'comment', 'follow', 'create-community', 'direct-message', 'share-to-user'].includes(composer.action));
+const recipientLabel = computed(() => composer.action === 'like' || composer.action === 'comment' ? '目标内容 ID' : composer.action === 'create-community' ? '社区名称' : composer.action === 'share-to-user' && selectedComposerAccount.value?.platform === 'system-share' ? '收件人备注（可选）' : '收件人 ID');
+const recipientPlaceholder = computed(() => composer.action === 'like' || composer.action === 'comment' ? '帖子 / 笔记 / 视频 ID' : composer.action === 'create-community' ? 'community-name' : selectedComposerAccount.value?.platform === 'qq' ? 'QQ 号或群号' : '平台用户 ID');
+const bodyPlaceholder = computed(() => composer.action === 'publish' ? '写下角色要发布的内容…' : composer.action === 'comment' ? '写下要发表的评论…' : composer.action === 'create-community' ? '写下社区介绍…' : '写下要发送或分享的内容…');
+const queueButtonLabel = computed(() => selectedComposerAccount.value?.platform === 'moltbook' ? composer.scheduledAt ? '加入自动队列' : '立即加入自动队列' : currentPolicy.value?.approvalMode === 'always' ? '提交待确认' : composer.scheduledAt ? '加入计划队列' : '创建任务');
 const currentPolicy = computed(() => selectedCharacter.value ? operations.policyForCharacter(selectedCharacter.value.id) : null);
 
 function splitList(value: string) {
@@ -199,12 +223,62 @@ function notify(message: string, kind: 'success' | 'error' = 'success') {
   noticeKind.value = kind;
 }
 
+async function loadMoltbookActivity() {
+  if (moltbookActivityLoading.value) return;
+  moltbookActivityLoading.value = true;
+  try {
+    moltbookActivities.value = await listMoltbookActivity(120);
+  } catch {
+    return;
+  } finally {
+    moltbookActivityLoading.value = false;
+  }
+}
+
+function actionLabelForMoltbook(action: string) {
+  return {
+    get_home: '读取首页',
+    get_profile: '读取主页',
+    get_feed: '读取动态',
+    search: '搜索内容',
+    get_post: '读取帖子',
+    get_comments: '读取评论',
+    create_post: '发布帖子',
+    create_comment: '发表评论',
+    upvote_post: '点赞帖子',
+    downvote_post: '反对帖子',
+    upvote_comment: '点赞评论',
+    downvote_comment: '反对评论',
+    follow_agent: '关注 Agent',
+    unfollow_agent: '取消关注 Agent',
+    create_submolt: '创建社区',
+    subscribe_submolt: '订阅社区',
+    unsubscribe_submolt: '取消订阅社区',
+    verify_content: '提交内容验证'
+  }[action] ?? action;
+}
+
+function moltbookActivityStatusLabel(status: MoltbookActivity['status']) {
+  return {
+    succeeded: '已成功',
+    failed: '失败',
+    'rate-limited': '官方限流',
+    'verification-pending': '等待内容验证',
+    pending: '处理中',
+    blocked: '已阻止'
+  }[status];
+}
+
+function moltbookActivityIcon(status: MoltbookActivity['status']) {
+  return status === 'succeeded' ? CheckCircle2 : status === 'failed' || status === 'rate-limited' || status === 'blocked' ? CircleAlert : Clock3;
+}
+
 function goBack() {
   void router.push({ name: 'services' });
 }
 
 function platformLabel(platform: RoleSocialPlatform) {
-  return { xiaohongshu: '小红书', douyin: '抖音', qq: 'QQ', 'system-share': '系统分享' }[platform];
+  return { xiaohongshu: '小红书', douyin: '抖音', qq: 'QQ', moltbook: 'Moltbook', 'system-share': '系统分享' }[platform];
 }
 
 function platformIcon(platform: RoleSocialPlatform) {
@@ -212,7 +286,7 @@ function platformIcon(platform: RoleSocialPlatform) {
 }
 
 function actionLabel(action: RoleOutboundAction) {
-  return { like: '点赞内容', publish: '发布内容', comment: '发表评论', 'direct-message': '发送私信', 'share-to-user': '分享给用户' }[action];
+  return { like: '点赞内容', publish: '发布内容', comment: '发表评论', follow: '关注 Agent', 'create-community': '创建社区', 'direct-message': '发送私信', 'share-to-user': '分享给用户' }[action];
 }
 
 function taskStatusLabel(status: RoleOperationTaskStatus) {
@@ -233,7 +307,7 @@ function conversationTitle(conversationId: string) {
 }
 
 function accountCapabilityText(account: RoleSocialAccount) {
-  const labels: Record<RoleSocialAccount['capabilities'][number], string> = { like: '点赞内容', publish: '发布内容', comment: '发表评论', 'direct-message': '发送私信', 'share-to-user': '分享给用户', schedule: '定时发布', metrics: '创作数据' };
+  const labels: Record<RoleSocialAccount['capabilities'][number], string> = { like: '点赞内容', publish: '发布内容', comment: '发表评论', follow: '关注 Agent', 'create-community': '创建社区', 'direct-message': '发送私信', 'share-to-user': '分享给用户', schedule: '定时发布', metrics: '创作数据' };
   return account.capabilities.length ? account.capabilities.map((capability) => labels[capability]).join(' · ') : '当前连接未发现可用写工具';
 }
 
@@ -257,6 +331,7 @@ function syncAccountServer() {
     if (accountForm.platform === 'qq') return server.kind === 'qq' || server.tools.some((tool) => tool.name.startsWith('qq_'));
     if (accountForm.platform === 'xiaohongshu') return server.kind === 'xiaohongshu' || server.tools.some((tool) => tool.name.startsWith('xhs_'));
     if (accountForm.platform === 'douyin') return server.kind === 'douyin-search' || server.tools.some((tool) => tool.name.startsWith('douyin_'));
+    if (accountForm.platform === 'moltbook') return server.kind === 'moltbook' && Boolean(server.moltbookAccountId);
     return false;
   });
   accountForm.serverId = candidates[0]?.id ?? '';
@@ -287,7 +362,7 @@ async function createAccount() {
   accountForm.accountId = '';
   accountFormOpen.value = false;
   composer.accountId = account.id;
-  composer.action = account.capabilities.find((capability): capability is RoleOutboundAction => ['like', 'publish', 'comment', 'direct-message', 'share-to-user'].includes(capability)) ?? 'publish';
+  composer.action = account.capabilities.find((capability): capability is RoleOutboundAction => ['like', 'publish', 'comment', 'follow', 'create-community', 'direct-message', 'share-to-user'].includes(capability)) ?? 'publish';
   notify('角色账号已保存。写入能力会以当前 MCP 连接实际返回的工具为准。');
 }
 
@@ -337,7 +412,7 @@ async function saveDraft() {
 
 async function queueTask() {
   if (!selectedCharacter.value || !selectedComposerAccount.value) return notify('请先选择角色账号。', 'error');
-  if (composer.action !== 'like' && !composer.body.trim() && !composer.linkUrl.trim()) return notify('请填写正文或分享链接。', 'error');
+  if (!['like', 'follow'].includes(composer.action) && composer.action !== 'create-community' && !composer.body.trim() && !composer.linkUrl.trim()) return notify('请填写正文或分享链接。', 'error');
   if (needsRecipient.value && composer.action !== 'share-to-user' && !composer.recipient.trim()) return notify('请填写目标内容或收件人 ID。', 'error');
   const policy = currentPolicy.value ?? createDefaultRoleOperationPolicy(selectedCharacter.value.id);
   const task = createRoleOutboundTask({
@@ -355,8 +430,8 @@ async function queueTask() {
     scheduledAt: scheduledTimestamp()
   }, policy);
   await operations.saveTask(task);
-  await operations.saveAudit(operationAudit(task, 'queued', task.status === 'awaiting-approval' ? '任务已创建，等待用户确认。' : '任务已进入可执行队列。'));
-  notify(task.status === 'awaiting-approval' ? '已加入待确认队列。' : '任务已加入执行队列。');
+  await operations.saveAudit(operationAudit(task, 'queued', task.platform === 'moltbook' ? 'Moltbook 任务已进入自动执行队列，BabyLink 不再要求逐条确认。' : task.status === 'awaiting-approval' ? '任务已创建，等待用户确认。' : '任务已进入可执行队列。'));
+  notify(task.platform === 'moltbook' ? 'Moltbook 任务已加入自动执行队列。' : task.status === 'awaiting-approval' ? '已加入待确认队列。' : '任务已加入执行队列。');
   clearComposer();
 }
 
@@ -405,6 +480,7 @@ async function executeTask(task: RoleOutboundTask) {
     notify(next.errorSummary, 'error');
   } finally {
     busyTaskIds.value = new Set([...busyTaskIds.value].filter((id) => id !== task.id));
+    if (task.platform === 'moltbook') void loadMoltbookActivity();
   }
 }
 
@@ -466,11 +542,16 @@ onMounted(async () => {
     if (document.visibilityState === 'visible') void runDueTasks();
   };
   document.addEventListener('visibilitychange', visibilityListener);
+  dueTaskTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') void runDueTasks();
+  }, 60_000);
+  void loadMoltbookActivity();
   void runDueTasks();
 });
 
 onBeforeUnmount(() => {
   if (visibilityListener) document.removeEventListener('visibilitychange', visibilityListener);
+  if (dueTaskTimer !== null) window.clearInterval(dueTaskTimer);
 });
 </script>
 
@@ -739,6 +820,20 @@ onBeforeUnmount(() => {
 .audit-list .audit-shared { color: #4f9270; background: #e9f7ee; }
 .audit-list .audit-failed,
 .audit-list .audit-blocked { color: #b25c72; background: #ffeff3; }
+
+.moltbook-activity-pane { gap: 12px; }
+.moltbook-activity-list { display: grid; gap: 8px; }
+.moltbook-activity-list article { display: grid; grid-template-columns: 30px minmax(0, 1fr); align-items: center; gap: 9px; padding: 10px; border: 1px solid rgba(162, 128, 142, .1); border-radius: 16px; background: rgba(255,255,255,.66); }
+.moltbook-activity-list article > span { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 10px; }
+.moltbook-activity-list article > div { display: grid; min-width: 0; gap: 3px; }
+.moltbook-activity-list strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #51424a; font-size: 10px; }
+.moltbook-activity-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #97858c; font-size: 9px; }
+.moltbook-activity-succeeded { color: #4f9270; background: #e9f7ee; }
+.moltbook-activity-failed,
+.moltbook-activity-rate-limited,
+.moltbook-activity-blocked { color: #b25c72; background: #ffeff3; }
+.moltbook-activity-verification-pending,
+.moltbook-activity-pending { color: #967b4d; background: #fff5dc; }
 
 @media (max-width: 350px) {
   .account-card,

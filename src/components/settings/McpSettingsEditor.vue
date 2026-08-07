@@ -96,7 +96,6 @@
             <span class="server-avatar" :class="`kind-${server.kind}`">
               <Camera v-if="server.kind === 'xiaohongshu'" :size="19" />
               <MessageCircle v-else-if="server.kind === 'qq'" :size="19" />
-              <BellRing v-else-if="server.kind === 'notification-inbox'" :size="19" />
               <Smartphone v-else-if="server.kind === 'reality'" :size="19" />
               <Network v-else :size="19" />
             </span>
@@ -116,7 +115,7 @@
             <span>{{ server.lastCheckedAt ? formatLastChecked(server.lastCheckedAt) : '保存后自动检测' }}</span>
           </div>
 
-          <div class="endpoint-row"><BellRing v-if="server.kind === 'notification-inbox'" :size="14" /><Smartphone v-else-if="server.kind === 'reality'" :size="14" /><Globe2 v-else :size="14" /><span>{{ isBuiltinMcpServer(server) ? '当前设备本地执行 · 不需要远程地址' : server.url }}</span></div>
+          <div class="endpoint-row"><Smartphone v-if="server.kind === 'reality'" :size="14" /><Globe2 v-else :size="14" /><span>{{ isBuiltinMcpServer(server) ? '当前设备本地执行 · 不需要远程地址' : server.url }}</span></div>
 
           <div class="server-tags">
             <span :class="server.globalEnabled ? 'active' : ''">{{ server.globalEnabled ? '全局应用' : '仅角色选择' }}</span>
@@ -469,7 +468,6 @@ function kindLabel(kind: McpServerKind) {
   if (kind === 'xiaohongshu') return '小红书电脑 Bridge';
   if (kind === 'qq') return 'QQ / NapCat MCP';
   if (kind === 'reality') return 'Reality MCP · 手机能力';
-  if (kind === 'notification-inbox') return '系统通知 MCP · 角色专用';
   if (kind === 'taobao-search') return '淘宝商品搜索 MCP';
   if (kind === 'douyin-search') return '抖音视频搜索 MCP';
   if (kind === 'xiaohongshu-search') return '小红书内容搜索 MCP';
@@ -477,7 +475,7 @@ function kindLabel(kind: McpServerKind) {
 }
 
 function isBuiltinMcpServer(server: McpServerConfig) {
-  return server.kind === 'reality' || server.kind === 'notification-inbox';
+  return server.kind === 'reality';
 }
 
 function policyDescription(policy: McpToolPolicy) {

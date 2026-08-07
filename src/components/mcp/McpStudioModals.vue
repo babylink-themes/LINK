@@ -44,8 +44,8 @@
   <AppModal :model-value="showComposer" :title="editingServerId ? '编辑 MCP' : '添加 MCP'" :show-header="false" fixed-height variant="ins" @update:model-value="showComposer = $event">
     <form class="mcp-modal-shell" @submit.prevent="saveComposer">
       <section class="mcp-modal-hero" :class="`kind-${composer.kind}`">
-        <span class="mcp-modal-icon"><Heart v-if="composer.kind === 'xiaohongshu' || composer.kind === 'xiaohongshu-search'" :size="22" /><MessageCircle v-else-if="composer.kind === 'qq'" :size="22" /><TerminalSquare v-else-if="composer.kind === 'termux'" :size="22" /><ShoppingBag v-else-if="composer.kind === 'taobao-search'" :size="22" /><Clapperboard v-else-if="composer.kind === 'douyin-search'" :size="22" /><Network v-else :size="22" /></span>
-        <div><small>{{ composer.kind === 'termux' ? 'ANDROID LOCAL HUB' : composer.kind.endsWith('-search') ? 'AI PLATFORM SEARCH' : composer.kind === 'custom' ? 'REMOTE MCP' : 'COMPUTER SERVICE' }}</small><h2>{{ serverKindLabel(composer) }}</h2><p>{{ composerKindHelper }}</p></div>
+        <span class="mcp-modal-icon"><Heart v-if="composer.kind === 'xiaohongshu' || composer.kind === 'xiaohongshu-search'" :size="22" /><MessageCircle v-else-if="composer.kind === 'qq'" :size="22" /><TerminalSquare v-else-if="composer.kind === 'termux'" :size="22" /><ShoppingBag v-else-if="composer.kind === 'taobao-search'" :size="22" /><Clapperboard v-else-if="composer.kind === 'douyin-search'" :size="22" /><Network :size="22" v-else /></span>
+        <div><small>{{ composer.kind === 'moltbook' ? 'MOLTBOOK OFFICIAL API' : composer.kind === 'termux' ? 'ANDROID LOCAL HUB' : composer.kind.endsWith('-search') ? 'AI PLATFORM SEARCH' : composer.kind === 'custom' ? 'REMOTE MCP' : 'COMPUTER SERVICE' }}</small><h2>{{ serverKindLabel(composer) }}</h2><p>{{ composerKindHelper }}</p></div>
       </section>
 
       <nav class="mcp-composer-tabs" aria-label="MCP 编辑分栏">
@@ -53,7 +53,7 @@
         <button type="button" :class="{ active: composerTab === 'advanced' }" @click="composerTab = 'advanced'">高级设置</button>
       </nav>
 
-      <section v-if="composerTab === 'quick'" class="mcp-modal-scroll mcp-form-grid">
+      <section v-if="composerTab === 'quick' && composer.kind !== 'moltbook'" class="mcp-modal-scroll mcp-form-grid">
         <label class="mcp-modal-field"><span>显示名称</span><input v-model="composer.name" maxlength="60" required></label>
         <label class="mcp-modal-field">
           <span>MCP 地址</span>
@@ -80,6 +80,16 @@
         </label>
       </section>
 
+      <section v-else-if="composer.kind === 'moltbook'" class="mcp-modal-scroll mcp-form-grid moltbook-connect-guide">
+        <article class="moltbook-agent-tip"><span><Network :size="17" /></span><div><strong>Agent 就是角色在 Moltbook 的公开账号</strong><small>不是 QQ 号、邮箱，也不是 API Key。名字会显示在角色发布的帖子和评论旁边。</small></div></article>
+        <label class="mcp-modal-field"><span>Agent 名称 <em>你自己取一个公开昵称</em></span><input v-model="composer.name" maxlength="30" pattern="[A-Za-z0-9_-]{3,30}" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="例如：BabyLinkMuse" required><small>只能使用英文字母、数字、下划线或短横线，3–30 个字符；建议取一个独一无二、以后愿意公开使用的名字。</small></label>
+        <label class="mcp-modal-field"><span>Agent 简介 <em>可选</em></span><textarea v-model="composer.description" maxlength="1000" rows="3" placeholder="例如：分享角色日常、AI 创作和有趣观察。"></textarea><small>用一句话介绍这个角色会分享什么，之后也可以在 Moltbook 修改。</small></label>
+        <article class="moltbook-guide-step"><b>1</b><span><strong>BabyLink 自动创建</strong><small>通过 Moltbook 官方注册接口创建 Agent，API Key 只在服务端加密保存。</small></span></article>
+        <article class="moltbook-guide-step"><b>2</b><span><strong>打开官方认领页</strong><small>创建完成后自动打开 Moltbook 官方页面，你按页面提示完成认领。</small></span></article>
+        <article class="moltbook-guide-step"><b>3</b><span><strong>回到这里检查状态</strong><small>认领完成后，在连接详情点击“重新检测”，再到运营中心绑定给角色。</small></span></article>
+        <p class="mcp-import-tip"><ShieldCheck :size="15" /> BabyLink 不会绕过 Moltbook 的官方限流、发帖冷却、内容验证或账号封禁规则。</p>
+      </section>
+
       <section v-else class="mcp-modal-scroll mcp-form-grid">
         <label class="mcp-modal-field"><span>连接说明</span><textarea v-model="composer.description" maxlength="400" rows="3"></textarea></label>
         <div class="mcp-two-fields">
@@ -97,7 +107,7 @@
       <p v-if="composerError" class="mcp-modal-error"><AlertTriangle :size="15" />{{ composerError }}</p>
       <footer class="mcp-modal-footer">
         <button type="button" @click="showComposer = false">取消</button>
-        <button class="primary" type="submit" :disabled="savingComposer">{{ savingComposer ? '正在保存…' : '保存并自动检测' }}</button>
+        <button class="primary" type="submit" :disabled="savingComposer">{{ savingComposer ? '正在处理…' : composer.kind === 'moltbook' ? '创建 Agent 并打开认领页' : '保存并自动检测' }}</button>
       </footer>
     </form>
   </AppModal>
@@ -286,6 +296,15 @@ const {
 .mcp-modal-field textarea { min-height: 92px; resize: vertical; line-height: 1.55; }
 .mcp-modal-field input:focus, .mcp-modal-field textarea:focus, .mcp-modal-field select:focus { box-shadow: inset 0 0 0 1px rgba(91, 146, 112, 0.45), 0 0 0 3px rgba(142, 203, 166, 0.13); }
 .mcp-modal-field > small { color: #91888d; font-size: 9px; font-weight: 700; line-height: 1.45; }
+
+.moltbook-connect-guide { gap: 10px; }
+.moltbook-agent-tip { display: grid; grid-template-columns: 34px minmax(0, 1fr); align-items: start; gap: 9px; padding: 11px; border-radius: 17px; color: #4d6d5c; background: linear-gradient(145deg, #edf8f1, #fff7fa); }
+.moltbook-agent-tip > span { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 12px; background: rgba(255, 255, 255, 0.76); }
+.moltbook-agent-tip > div, .moltbook-guide-step > span { display: grid; gap: 2px; min-width: 0; }
+.moltbook-agent-tip strong, .moltbook-guide-step strong { font-size: 11px; font-weight: 950; }
+.moltbook-agent-tip small, .moltbook-guide-step small { color: #78847d; font-size: 9px; font-weight: 700; line-height: 1.5; }
+.moltbook-guide-step { display: grid; grid-template-columns: 25px minmax(0, 1fr); align-items: center; gap: 9px; padding: 9px 10px; border-radius: 16px; background: rgba(255, 255, 255, 0.7); box-shadow: inset 0 0 0 1px rgba(75, 64, 70, 0.05); }
+.moltbook-guide-step > b { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 9px; color: #4a775f; background: #eaf6ef; font-size: 10px; }
 
 .mcp-modal-help { border-radius: 16px; background: rgba(255, 255, 255, 0.58); }
 .mcp-modal-help summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 11px 12px; color: #645c60; font-size: 10px; font-weight: 900; cursor: pointer; list-style: none; }

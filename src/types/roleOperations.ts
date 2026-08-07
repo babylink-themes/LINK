@@ -1,6 +1,6 @@
-export type RoleSocialPlatform = 'xiaohongshu' | 'douyin' | 'qq' | 'system-share';
+export type RoleSocialPlatform = 'xiaohongshu' | 'douyin' | 'qq' | 'moltbook' | 'system-share';
 
-export type RoleOperationCapability = 'like' | 'publish' | 'comment' | 'direct-message' | 'share-to-user' | 'schedule' | 'metrics';
+export type RoleOperationCapability = 'like' | 'publish' | 'comment' | 'follow' | 'create-community' | 'direct-message' | 'share-to-user' | 'schedule' | 'metrics';
 
 export type UserSocialReadCapability = 'profile' | 'posts' | 'search' | 'detail' | 'comments';
 
@@ -10,7 +10,7 @@ export type UserSocialManualAction = 'like' | 'comment' | 'direct-message';
 
 export type RoleSocialAccountStatus = 'unknown' | 'connected' | 'offline' | 'error';
 
-export type RoleOutboundAction = 'like' | 'publish' | 'comment' | 'direct-message' | 'share-to-user';
+export type RoleOutboundAction = 'like' | 'publish' | 'comment' | 'follow' | 'create-community' | 'direct-message' | 'share-to-user';
 
 export type RoleOperationTaskStatus = 'draft' | 'awaiting-approval' | 'scheduled' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'blocked';
 

@@ -26,22 +26,6 @@ export const realityMcpTools: McpToolDefinition[] = [
     write: false
   },
   {
-    name: 'get_app_usage_access',
-    title: '检查使用时长权限',
-    description: '检查 Android 是否已允许 BabyLink 读取系统 App 使用情况；不会打开其他 App 或伪造统计。',
-    inputSchema: objectSchema({}),
-    enabled: true,
-    write: false
-  },
-  {
-    name: 'request_app_usage_access',
-    title: '授权使用时长',
-    description: '打开 Android 官方“使用情况访问权限”设置，由用户亲自允许 BabyLink；不会自动授予权限。',
-    inputSchema: objectSchema({}),
-    enabled: true,
-    write: true
-  },
-  {
     name: 'get_app_usage',
     title: '读取 App 使用时长',
     description: '通过 Android UsageStatsManager 读取真实 App 前台使用时长、最后使用时间与包名，最多查询最近 31 天。',
@@ -54,124 +38,6 @@ export const realityMcpTools: McpToolDefinition[] = [
     }),
     enabled: true,
     write: false
-  },
-  {
-    name: 'get_app_usage_report',
-    title: '生成 App 使用报告',
-    description: '根据 Android 真实使用时长生成日/周汇总、分类占比、常用 App 与专注提醒建议。',
-    inputSchema: objectSchema({
-      days: { type: 'number', minimum: 1, maximum: 31, description: '按本地自然日统计的报告天数，默认 7；传 1 表示今天' },
-      focusThresholdMinutes: { type: 'number', minimum: 15, maximum: 1440, description: '单 App 专注提醒阈值，默认 120 分钟' }
-    }),
-    enabled: true,
-    write: false
-  },
-  {
-    name: 'get_notification_inbox_access',
-    title: '检查通知收件箱权限',
-    description: '检查 Android 是否已由用户允许 BabyLink 读取系统通知；不会自动授权。',
-    inputSchema: objectSchema({}),
-    enabled: true,
-    write: false
-  },
-  {
-    name: 'request_notification_inbox_access',
-    title: '授权通知收件箱',
-    description: '打开 Android 官方通知使用权设置，由用户亲自决定是否允许。',
-    inputSchema: objectSchema({}),
-    enabled: true,
-    write: true
-  },
-  {
-    name: 'get_notification_inbox',
-    title: '读取通知收件箱',
-    description: '读取授权后保存在本机的近期通知摘要，可筛选快递、外卖、会议、出行、购物和消息；验证码会被遮盖。',
-    inputSchema: objectSchema({
-      days: { type: 'number', minimum: 1, maximum: 7, description: '查询最近天数，默认 1' },
-      category: { type: 'string', enum: ['delivery', 'food', 'meeting', 'travel', 'shopping', 'message', 'other'], description: '可选分类' },
-      limit: { type: 'number', minimum: 1, maximum: 200, description: '最多返回数量，默认 50' }
-    }),
-    enabled: true,
-    write: false
-  },
-  {
-    name: 'clear_notification_inbox',
-    title: '清空通知收件箱',
-    description: '经用户再次确认后，删除 BabyLink 在本机保存的通知摘要。',
-    inputSchema: objectSchema({}),
-    enabled: true,
-    write: true
-  },
-  {
-    name: 'prepare_date_plan',
-    title: '准备约会规划',
-    description: '一次读取天气、当前位置和系统日历空闲时间，为后续地点搜索与路线规划准备真实上下文。',
-    inputSchema: objectSchema({
-      from: stringProperty('ISO 8601 查询起始时间，默认现在'),
-      to: stringProperty('ISO 8601 查询结束时间，默认七天后'),
-      durationMinutes: { type: 'number', minimum: 15, maximum: 1440, description: '约会所需分钟数，默认 120' }
-    }),
-    enabled: true,
-    write: false
-  },
-  {
-    name: 'prepare_trip_plan',
-    title: '准备旅行规划',
-    description: '一次读取目的时间段的天气、当前位置与系统日程，供角色继续组合 POI、路线和提醒。',
-    inputSchema: objectSchema({
-      from: stringProperty('ISO 8601 行程起始时间'),
-      to: stringProperty('ISO 8601 行程结束时间')
-    }),
-    enabled: true,
-    write: false
-  },
-  {
-    name: 'prepare_shopping_plan',
-    title: '准备购物对比',
-    description: '读取当前剪贴板中的商品链接或口令，并给出平台搜索、比价和价格追踪的后续工具链。',
-    inputSchema: objectSchema({
-      query: stringProperty('想购买的商品或关键词'),
-      budget: { type: 'number', minimum: 0, description: '可选预算' },
-      targetPrice: { type: 'number', minimum: 0, description: '可选目标价' }
-    }, ['query']),
-    enabled: true,
-    write: false
-  },
-  {
-    name: 'prepare_study_session',
-    title: '准备一起学习',
-    description: '汇总真实 App 使用报告和待办提醒，为专注时长、音乐和休息节奏提供依据。',
-    inputSchema: objectSchema({ days: { type: 'number', minimum: 1, maximum: 31, description: '回顾天数，默认 7' } }),
-    enabled: true,
-    write: false
-  },
-  {
-    name: 'prepare_watch_together',
-    title: '准备共同追剧',
-    description: '读取系统日历空闲时间，为后续 B 站/网页内容搜索和一起观看安排提供真实时间段。',
-    inputSchema: objectSchema({
-      from: stringProperty('ISO 8601 查询起始时间，默认现在'),
-      to: stringProperty('ISO 8601 查询结束时间，默认七天后'),
-      durationMinutes: { type: 'number', minimum: 15, maximum: 480, description: '观看时长，默认 90 分钟' }
-    }),
-    enabled: true,
-    write: false
-  },
-  {
-    name: 'get_nightly_brief',
-    title: '生成睡前日报素材',
-    description: '一次汇总未来天气、明日日程、提醒、许可范围内的通知摘要和 App 使用报告。',
-    inputSchema: objectSchema({}),
-    enabled: true,
-    write: false
-  },
-  {
-    name: 'set_cooking_timer',
-    title: '设置烹饪计时器',
-    description: '为烹饪步骤创建真实系统提醒；必须提供未来的分钟数。',
-    inputSchema: objectSchema({ label: stringProperty('步骤名称'), minutes: { type: 'number', minimum: 1, maximum: 1440, description: '计时分钟数' } }, ['label', 'minutes']),
-    enabled: true,
-    write: true
   },
   {
     name: 'add_music_to_queue',
@@ -247,49 +113,6 @@ export const realityMcpTools: McpToolDefinition[] = [
     write: false
   },
   {
-    name: 'update_reminder',
-    title: '编辑提醒',
-    description: '修改真实系统提醒事项或 Android 系统日历提醒，必须使用之前返回的系统提醒 ID。',
-    inputSchema: objectSchema({
-      reminderId: stringProperty('提醒 ID'),
-      title: stringProperty('新标题，可省略'),
-      body: stringProperty('新内容，可省略'),
-      at: stringProperty('新的 ISO 8601 时间'),
-      delayMinutes: numberProperty('从现在开始的延迟分钟数'),
-      repeat: recurrenceProperties.repeat
-    }, ['reminderId']),
-    enabled: true,
-    write: true
-  },
-  {
-    name: 'complete_reminder',
-    title: '完成提醒',
-    description: '在 iOS 中完成系统提醒事项；在 Android 中移除对应的系统日历提醒事件。',
-    inputSchema: objectSchema({ reminderId: stringProperty('提醒 ID') }, ['reminderId']),
-    enabled: true,
-    write: true
-  },
-  {
-    name: 'snooze_reminder',
-    title: '稍后提醒',
-    description: '推迟真实系统提醒事项或 Android 系统日历提醒，必须使用之前返回的系统提醒 ID。',
-    inputSchema: objectSchema({
-      reminderId: stringProperty('提醒 ID'),
-      delayMinutes: numberProperty('推迟分钟数，默认 10 分钟'),
-      at: stringProperty('新的 ISO 8601 时间，与 delayMinutes 二选一')
-    }, ['reminderId']),
-    enabled: true,
-    write: true
-  },
-  {
-    name: 'cancel_reminder',
-    title: '取消提醒',
-    description: '删除真实系统提醒事项或 Android 系统日历提醒，必须使用之前返回的系统提醒 ID。',
-    inputSchema: objectSchema({ reminderId: stringProperty('提醒 ID') }, ['reminderId']),
-    enabled: true,
-    write: true
-  },
-  {
     name: 'create_calendar_event',
     title: '创建系统日程',
     description: '获得系统许可后，直接在 Android 或 iOS 的系统日历 App 中创建未来事件；开始时间必须基于当前现实时间，不能写入过去的日期。',
@@ -317,56 +140,6 @@ export const realityMcpTools: McpToolDefinition[] = [
     write: false
   },
   {
-    name: 'update_calendar_event',
-    title: '修改系统日程',
-    description: '使用系统事件 ID 修改日程标题、时间、地点、备注或重复规则；如果修改开始时间，新的时间必须基于当前现实时间且不能落在过去。',
-    inputSchema: objectSchema({
-      eventId: stringProperty('BabyLink 日程 ID 或系统事件 ID'),
-      title: stringProperty('新标题，可省略'),
-      startAt: stringProperty('新的 ISO 8601 开始时间'),
-      endAt: stringProperty('新的 ISO 8601 结束时间'),
-      location: stringProperty('新地点，可省略'),
-      notes: stringProperty('新备注，可省略'),
-      isAllDay: { type: 'boolean', description: '是否全天日程' },
-      ...recurrenceProperties
-    }, ['eventId']),
-    enabled: true,
-    write: true
-  },
-  {
-    name: 'delete_calendar_event',
-    title: '删除系统日程',
-    description: '使用 BabyLink 日程 ID 或系统事件 ID 删除真实系统日历事件。',
-    inputSchema: objectSchema({ eventId: stringProperty('BabyLink 日程 ID 或系统事件 ID') }, ['eventId']),
-    enabled: true,
-    write: true
-  },
-  {
-    name: 'check_calendar_conflicts',
-    title: '检查日程冲突',
-    description: '读取系统日历并检查指定时间段是否与现有事件冲突。',
-    inputSchema: objectSchema({
-      startAt: stringProperty('ISO 8601 开始时间'),
-      endAt: stringProperty('ISO 8601 结束时间'),
-      excludeEventId: stringProperty('可排除的系统事件 ID')
-    }, ['startAt', 'endAt']),
-    enabled: true,
-    write: false
-  },
-  {
-    name: 'find_calendar_free_time',
-    title: '查找空闲时间',
-    description: '读取系统日历，在指定范围内查找满足时长的空闲时间段。',
-    inputSchema: objectSchema({
-      from: stringProperty('ISO 8601 查询起始时间'),
-      to: stringProperty('ISO 8601 查询结束时间'),
-      durationMinutes: { type: 'number', minimum: 1, maximum: 1440, description: '所需连续空闲分钟数' },
-      limit: { type: 'number', minimum: 1, maximum: 20, description: '最多返回数量，默认 8' }
-    }, ['from', 'to', 'durationMinutes']),
-    enabled: true,
-    write: false
-  },
-  {
     name: 'create_memo',
     title: '发送到本机备忘录 App',
     description: '打开 Android/iOS 系统分享面板，把标题和正文交给用户选择的本机备忘录或笔记 App 保存。必须等待用户在目标 App 中确认；不会写入 BabyLink 本地备忘录。',
@@ -376,17 +149,6 @@ export const realityMcpTools: McpToolDefinition[] = [
     }, ['content']),
     enabled: true,
     write: true
-  },
-  {
-    name: 'list_memos',
-    title: '说明备忘录读取限制',
-    description: 'Android 和 iOS 没有读取所有第三方备忘录 App 的通用系统接口。不要调用此工具来伪造读取结果；应请用户直接在目标备忘录 App 中查看。',
-    inputSchema: objectSchema({
-      query: stringProperty('可选关键词；省略则读取最近备忘录'),
-      limit: { type: 'number', minimum: 1, maximum: 100, description: '最多返回条数，默认 50' }
-    }),
-    enabled: true,
-    write: false
   },
   {
     name: 'pick_contact',
@@ -472,14 +234,6 @@ export const realityMcpTools: McpToolDefinition[] = [
     write: false
   },
   {
-    name: 'analyze_clipboard',
-    title: '识别剪贴板工作流',
-    description: '先向用户确认，再识别剪贴板中的网页、地址、淘口令、BV 号或平台分享文本，并返回建议的下一步工具。',
-    inputSchema: objectSchema({ reason: stringProperty('向用户说明识别用途') }),
-    enabled: true,
-    write: false
-  },
-  {
     name: 'write_clipboard_text',
     title: '写入剪贴板',
     description: '先向用户弹出确认，再把指定文本或链接写入当前设备剪贴板。',
@@ -513,49 +267,14 @@ export const realityMcpTools: McpToolDefinition[] = [
     write: true
   },
   {
-    name: 'open_map_route',
-    title: '打开地图路线',
-    description: '在手机系统地图 App 中打开目的地；只负责跳转，不自动开始导航或下单。',
-    inputSchema: objectSchema({
-      destination: stringProperty('目的地名称或地址'),
-      latitude: numberProperty('目的地纬度，可选'),
-      longitude: numberProperty('目的地经度，可选')
-    }, ['destination']),
-    enabled: true,
-    write: true
-  },
-  {
-    name: 'open_amap',
-    title: '打开高德地图',
-    description: '使用目的地、经纬度或搜索词打开高德地图；未安装时回退到高德网页。',
-    inputSchema: objectSchema({ action: { type: 'string', enum: ['search', 'route'] }, keyword: stringProperty('地点、地址或搜索词'), latitude: numberProperty('目的地纬度，可选'), longitude: numberProperty('目的地经度，可选') }, ['action', 'keyword']),
-    enabled: true,
-    write: true
-  },
-  {
     name: 'open_mobile_app',
     title: '打开手机软件',
-    description: '打开高德、淘宝、抖音、网易云音乐、QQ、小红书、日历、天气或系统设置并带入搜索词；不能读取或控制其他 App 页面。',
-    inputSchema: objectSchema({ app: { type: 'string', enum: ['amap', 'taobao', 'douyin', 'netease_music', 'qq', 'xiaohongshu', 'calendar', 'weather', 'settings'] }, query: stringProperty('可选搜索词或账号') }, ['app']),
+    description: '打开淘宝、抖音、网易云音乐、QQ、小红书、日历、天气或系统设置并带入搜索词；不能读取或控制其他 App 页面。',
+    inputSchema: objectSchema({ app: { type: 'string', enum: ['taobao', 'douyin', 'netease_music', 'qq', 'xiaohongshu', 'calendar', 'weather', 'settings'] }, query: stringProperty('可选搜索词或账号') }, ['app']),
     enabled: true,
     write: true
   },
-  {
-    name: 'open_real_world_service',
-    title: '打开现实服务',
-    description: '打开已安装的电话、短信、邮件、地图、QQ 或小红书等现实服务。',
-    inputSchema: objectSchema({
-      service: { type: 'string', enum: ['phone', 'sms', 'email', 'maps', 'qq', 'xiaohongshu'] },
-      value: stringProperty('号码、地址、邮件或搜索词')
-    }, ['service']),
-    enabled: true,
-    write: true
-  }
 ];
-
-export const notificationInboxMcpTools: McpToolDefinition[] = realityMcpTools
-  .filter((tool) => tool.name === 'get_notification_inbox_access' || tool.name === 'get_notification_inbox')
-  .map((tool) => ({ ...tool, inputSchema: { ...tool.inputSchema } }));
 
 function cloneMcpTools(tools: McpToolDefinition[]) {
   return tools.map((tool) => ({ ...tool, inputSchema: { ...tool.inputSchema } }));
@@ -579,31 +298,6 @@ export function createBuiltinRealityMcpServer(): McpServerConfig {
     tools: cloneMcpTools(realityMcpTools),
     protocolVersion: 'builtin',
     serverName: 'BabyLink Reality MCP',
-    serverVersion: '1.0.0',
-    lastStatus: 'connected',
-    lastCheckedAt: 0,
-    lastError: ''
-  };
-}
-
-export function createBuiltinNotificationInboxMcpServer(): McpServerConfig {
-  return {
-    id: 'mcp_notification_inbox_builtin',
-    name: '系统通知 MCP · 角色专用',
-    kind: 'notification-inbox',
-    description: '只读取当前 Android 设备上经授权保存在本机的系统通知摘要。默认不全局应用，请专门绑定给需要查看通知的角色。',
-    url: 'builtin://notification-inbox',
-    headers: {},
-    apiKey: '',
-    apiKeyHeader: 'Authorization',
-    apiKeyPrefix: 'Bearer ',
-    enabled: true,
-    globalEnabled: false,
-    toolPolicy: 'read-only',
-    timeoutMs: 45_000,
-    tools: cloneMcpTools(notificationInboxMcpTools),
-    protocolVersion: 'builtin',
-    serverName: 'BabyLink Notification Inbox MCP',
     serverVersion: '1.0.0',
     lastStatus: 'connected',
     lastCheckedAt: 0,

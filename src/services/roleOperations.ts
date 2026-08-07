@@ -32,7 +32,7 @@ export function createRoleContentDraft(input: Omit<RoleContentDraft, 'id' | 'sta
 export function createRoleOutboundTask(input: Omit<RoleOutboundTask, 'id' | 'status' | 'requiresApproval' | 'approvedAt' | 'startedAt' | 'completedAt' | 'retryCount' | 'executionReference' | 'errorSummary' | 'createdAt' | 'updatedAt'>, policy: RoleOperationPolicy): RoleOutboundTask {
   const now = Date.now();
   const scheduled = Boolean(input.scheduledAt && input.scheduledAt > now);
-  const requiresApproval = policy.approvalMode === 'always';
+  const requiresApproval = input.platform !== 'moltbook' && policy.approvalMode === 'always';
   return {
     ...input,
     id: createId('role-task'),
@@ -129,6 +129,13 @@ function toolArguments(task: RoleOutboundTask) {
     if (task.action === 'publish') return { title: task.title.trim(), content: task.body.trim(), images: task.mediaUrls };
     if (task.action === 'comment') return { aweme_id: task.recipient.trim(), content };
     return { user_id: task.recipient.trim(), content };
+  }
+  if (task.platform === 'moltbook') {
+    if (task.action === 'like') return { postId: task.recipient.trim() };
+    if (task.action === 'publish') return { submoltName: task.recipient.trim(), title: task.title.trim(), content: task.body.trim(), ...(task.linkUrl.trim() ? { url: task.linkUrl.trim(), type: 'link' } : {}) };
+    if (task.action === 'comment') return { postId: task.recipient.trim(), content: task.body.trim() };
+    if (task.action === 'follow') return { agentName: task.recipient.trim() };
+    if (task.action === 'create-community') return { name: task.recipient.trim(), displayName: task.title.trim(), description: task.body.trim() };
   }
   return {};
 }
@@ -257,7 +264,7 @@ export function preflightRoleOperation(input: RoleOperationPreflightInput): Role
   if (task.status === 'cancelled' || task.status === 'succeeded') return { ok: false, error: '该任务已结束，不能再次执行。', server: null, toolName: '' };
   if (task.scheduledAt && task.scheduledAt > now) return { ok: false, error: '尚未到计划执行时间。', server: null, toolName: '' };
   if (task.requiresApproval && !task.approvedAt) return { ok: false, error: '任务仍在等待你的确认。', server: null, toolName: '' };
-  if (!task.approvedAt && !resolvesToAutoTrustedTask(task, policy)) return { ok: false, error: '此任务不满足可信自动执行条件。', server: null, toolName: '' };
+  if (task.platform !== 'moltbook' && !task.approvedAt && !resolvesToAutoTrustedTask(task, policy)) return { ok: false, error: '此任务不满足可信自动执行条件。', server: null, toolName: '' };
   if (isQuietHour(policy, now)) return { ok: false, error: '当前处于角色设置的静默时段。', server: null, toolName: '' };
   const blockedKeyword = taskContainsBlockedKeyword(task, policy.blockedKeywords);
   if (blockedKeyword) return { ok: false, error: `内容命中拦截词「${blockedKeyword}」。`, server: null, toolName: '' };
@@ -271,10 +278,10 @@ export function preflightRoleOperation(input: RoleOperationPreflightInput): Role
     return { ok: false, error: '收件人不在角色允许名单内。', server: null, toolName: '' };
   }
   const successfulWrites = input.audits.filter((audit) => audit.status === 'succeeded' || audit.status === 'shared');
-  if (successfulWrites.filter((audit) => audit.createdAt > now - 60 * 60 * 1000).length >= policy.maxWritesPerHour) {
+  if (task.platform !== 'moltbook' && successfulWrites.filter((audit) => audit.createdAt > now - 60 * 60 * 1000).length >= policy.maxWritesPerHour) {
     return { ok: false, error: '已达到角色每小时写入上限。', server: null, toolName: '' };
   }
-  if (successfulWrites.filter((audit) => audit.createdAt > now - 24 * 60 * 60 * 1000).length >= policy.maxWritesPerDay) {
+  if (task.platform !== 'moltbook' && successfulWrites.filter((audit) => audit.createdAt > now - 24 * 60 * 60 * 1000).length >= policy.maxWritesPerDay) {
     return { ok: false, error: '已达到角色每日写入上限。', server: null, toolName: '' };
   }
   if (task.platform === 'system-share') return { ok: true, error: '', server: null, toolName: 'system-share' };
@@ -298,7 +305,7 @@ export async function executeRoleOperation(input: RoleOperationPreflightInput) {
     await shareText(input.task.title || '来自角色的分享', input.task.body, input.task.linkUrl);
     return { ok: true, check, reference: 'system-share', summary: '已打开系统分享面板。' };
   }
-  const result = await executeMcpTool(check.server!, check.toolName, toolArguments(input.task));
+  const result = await executeMcpTool(check.server!, check.toolName, toolArguments(input.task), input.task.characterId);
   if (result.isError) return { ok: false, check, reference: '', summary: summarize(result.text) || '外部平台拒绝了该操作。' };
   return { ok: true, check, reference: `${check.server!.id}:${check.toolName}`, summary: summarize(result.text) || '外部平台已确认操作。' };
 }

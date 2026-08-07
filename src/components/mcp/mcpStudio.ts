@@ -4,6 +4,8 @@ import { createMcpServerTemplate, importMcpServers, inspectMcpServer, normalizeM
 import { useAppStore } from '@/stores/appStore';
 import type { McpServerConfig, McpServerKind, McpSettings, McpToolDefinition, McpToolPolicy } from '@/types/domain';
 import { normalizeAppSettings, normalizeMcpSettings } from '@/utils/settings';
+import { createId } from '@/utils/id';
+import { refreshMoltbookAccount, type MoltbookAccount } from '@/services/moltbook';
 
 export type McpStudioView = 'overview' | 'phone' | 'connections' | 'preferences' | 'server';
 export type McpNotice = { kind: 'success' | 'error'; text: string };
@@ -123,6 +125,7 @@ export function useMcpStudioController(navigate: McpStudioContext['navigate']): 
         { title: '复制配对信息', detail: '电脑助手会生成一段配对信息，复制后粘贴到下方。' }
       ]);
   const composerKindHelper = computed(() => {
+    if (composer.kind === 'moltbook') return '不需要电脑或 Termux；BabyLink 服务端直接连接 Moltbook 官方 API。登录 BabyLink 后完成 Agent 注册和官方认领。';
     if (composer.kind === 'termux') return 'Android App 会通过受限原生中继连接同机 127.0.0.1；API Key 填 Termux 配置中的随机 Token。';
     if (composer.kind === 'taobao-search') return '接入真实淘宝联盟物料搜索；PID、Session 与第三方配置凭据必须保存在自托管服务端。';
     if (composer.kind === 'douyin-search') return '接入真实抖音视频搜索；参考实现默认是 stdio，需先包装为 Streamable HTTP。';
@@ -191,6 +194,7 @@ export function useMcpStudioController(navigate: McpStudioContext['navigate']): 
     editingServerId.value = '';
     composerTab.value = 'quick';
     Object.assign(composer, createMcpServerTemplate(kind));
+    if (kind === 'moltbook') composer.name = '';
     headersText.value = '{}';
     composerError.value = '';
     showComposer.value = true;
@@ -222,6 +226,17 @@ export function useMcpStudioController(navigate: McpStudioContext['navigate']): 
     checkingIdsState.value = new Set([...checkingIdsState.value, server.id]);
     clearNotice();
     try {
+      if (server.kind === 'moltbook') {
+        if (!server.moltbookAccountId) throw new Error('Moltbook 尚未绑定 Agent 账号。');
+        const account = await refreshMoltbookAccount(server.moltbookAccountId);
+        await patchServer(server.id, {
+          lastStatus: account.claimStatus === 'claimed' ? 'connected' : 'idle',
+          lastCheckedAt: account.lastCheckedAt || Date.now(),
+          lastError: account.claimStatus === 'claimed' ? '' : `等待完成 Moltbook Agent 认领。${account.claimUrl || ''}`
+        });
+        setNotice(account.claimStatus === 'claimed' ? 'success' : 'error', account.claimStatus === 'claimed' ? `${account.agentName} 已完成认领。` : `请先完成 Moltbook Agent 认领：${account.claimUrl || '暂无认领链接'}`);
+        return;
+      }
       const inspection = await inspectMcpServer(server);
       await patchServer(server.id, {
         ...inspection,
@@ -307,6 +322,52 @@ export function useMcpStudioController(navigate: McpStudioContext['navigate']): 
     composerError.value = '';
     savingComposer.value = true;
     try {
+      if (composer.kind === 'moltbook') {
+        const agentName = composer.name.trim();
+        if (!agentName) throw new Error('已取消 Moltbook Agent 注册。');
+        const response = await fetch('/api/moltbook/accounts/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ agentName, description: composer.description.trim() })
+        });
+        const rawResponse = await response.text();
+        let account: Partial<MoltbookAccount> & Record<string, unknown> = {};
+        try {
+          const parsed = rawResponse ? JSON.parse(rawResponse) as unknown : {};
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) account = parsed as Partial<MoltbookAccount> & Record<string, unknown>;
+        } catch {
+          if (!response.ok && rawResponse.trim()) throw new Error(rawResponse.trim().slice(0, 300));
+        }
+        if (!response.ok) {
+          if (response.status === 502 && !account.message && !account.error) throw new Error('BabyLink 服务端暂不可用，请确认服务端和 PostgreSQL 已启动。');
+          throw new Error(String(account.message ?? account.error ?? 'Moltbook Agent 注册失败。'));
+        }
+        const accountId = account.id;
+        const accountName = account.agentName || agentName;
+        if (!accountId) throw new Error('Moltbook 注册成功，但服务端没有返回账号绑定。');
+        const nextServer: McpServerConfig = {
+          ...createMcpServerTemplate('moltbook'),
+          id: editingServerId.value || createId('mcp'),
+          name: `Moltbook · ${accountName}`,
+          globalEnabled: false,
+          moltbookAccountId: accountId,
+          lastStatus: account.claimStatus === 'claimed' ? 'connected' : 'idle',
+          lastCheckedAt: account.lastCheckedAt || Date.now()
+        };
+        await saveMcpSettings({
+          ...settings.value,
+          servers: editingServerId.value
+            ? settings.value.servers.map((server) => server.id === editingServerId.value ? nextServer : server)
+            : [...settings.value.servers, nextServer]
+        });
+        showComposer.value = false;
+        if (account.claimUrl) window.open(account.claimUrl, '_blank', 'noopener,noreferrer');
+        const verificationHint = account.verificationCode ? ` 验证码：${account.verificationCode}` : '';
+        const claimHint = account.claimUrl ? `已打开官方认领页面。${verificationHint}` : `请在 Moltbook 完成 Agent 认领。${verificationHint}`;
+        setNotice('success', `Agent ${accountName} 已创建。${claimHint}`);
+        return;
+      }
       const nextServer: McpServerConfig = {
         ...composer,
         name: composer.name.trim() || serverKindLabel(composer),
@@ -384,6 +445,17 @@ export function useMcpStudioController(navigate: McpStudioContext['navigate']): 
     if (!server || deleting.value) return;
     deleting.value = true;
     try {
+      if (server.kind === 'moltbook' && server.moltbookAccountId) {
+        const response = await fetch(`/api/moltbook/accounts/${encodeURIComponent(server.moltbookAccountId)}`, {
+          method: 'DELETE',
+          credentials: 'same-origin',
+          headers: { Accept: 'application/json' }
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(String(payload.message ?? payload.error ?? 'Moltbook 凭据解绑失败。'));
+        }
+      }
       await saveMcpSettings({
         ...settings.value,
         servers: settings.value.servers.filter((entry) => entry.id !== server.id)
@@ -460,10 +532,10 @@ export function useMcpStudioController(navigate: McpStudioContext['navigate']): 
 
 export function serverKindLabel(server: McpServerConfig) {
   if (server.kind === 'reality') return 'Reality MCP · 手机能力';
-  if (server.kind === 'notification-inbox') return '系统通知 MCP · 角色专用';
   if (server.kind === 'termux') return 'Termux · Android 本机网关';
   if (server.kind === 'qq') return 'QQ / NapCat MCP';
   if (server.kind === 'xiaohongshu') return '小红书电脑 Bridge';
+  if (server.kind === 'moltbook') return 'Moltbook 官方 API';
   if (server.kind === 'taobao-search') return '淘宝商品搜索 MCP';
   if (server.kind === 'douyin-search') return '抖音视频搜索 MCP';
   if (server.kind === 'xiaohongshu-search') return '小红书内容搜索 MCP';
@@ -472,10 +544,10 @@ export function serverKindLabel(server: McpServerConfig) {
 
 export function serverKindShortLabel(server: McpServerConfig) {
   if (server.kind === 'reality') return 'PHONE';
-  if (server.kind === 'notification-inbox') return 'NOTIFICATIONS';
   if (server.kind === 'termux') return 'TERMUX';
   if (server.kind === 'qq') return 'QQ';
   if (server.kind === 'xiaohongshu') return 'RED';
+  if (server.kind === 'moltbook') return 'MOLTBOOK';
   if (server.kind === 'taobao-search') return 'TAOBAO';
   if (server.kind === 'douyin-search') return 'DOUYIN';
   if (server.kind === 'xiaohongshu-search') return 'RED SEARCH';

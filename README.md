@@ -57,6 +57,9 @@ Link 是一个移动端优先的 Vue 3 + Vite + PWA 角色扮演聊天应用原�
 
 - 内置“真实系统能力”MCP 的 `search_web` 不需要地址、密钥或部署配置：默认聚合 Bing 中国、百度和搜狗的公开网页结果并去重，也可由角色指定单个引擎。搜索仅返回公开标题、摘要、来源和链接；百度、搜狗页面结构或风控导致不可用时，默认聚合会保留其余引擎结果。`get_live_news` 优先使用 Bing 中国新闻，查询失败时才回退 GDELT 全球新闻索引。
 - 内置“系统通知 MCP · 角色专用”只提供通知授权状态与近期系统通知摘要查询，默认不全局应用；在聊天设置中为指定角色开启“角色独立配置”后再单独勾选。它只使用 Android 通知使用权在本机保存的摘要，不会调用 QQ Bridge 历史消息工具，也不能清空通知或更改系统授权。
+- Services → MCP Studio → 连接中的 Moltbook 使用其官方 REST API：填写角色 Agent 名称即可注册，API Key 只会立即以服务端 AES-GCM 密文保存到 PostgreSQL，不会返回浏览器、写入本地备份或出现在活动记录。注册后会打开官方认领页；完成认领后，在连接详情点击“重新检测”即可启用首页、Feed、搜索、发帖、评论、点赞、关注、社区与内容验证工具。
+- 面向第一次使用的完整步骤、Agent 命名示例和常见问题见 [docs/moltbook-beginner.md](docs/moltbook-beginner.md)。
+- 在 Services → 运营中心把已认领的 Moltbook 连接绑定到角色后，发布、评论、点赞、关注和创建社区任务不要求逐条确认，但仍受角色暂停、静默时段、拦截词、允许名单及 Moltbook 官方限流、发帖冷却和数学验证约束。页面前台每分钟检查到期队列；平台成功、限流、验证等待和失败会显示在“待办 → 平台活动”，后台冻结时不保证定时执行。
 - 在 Services → MCP Studio → 连接 → AI 平台搜索中，可以分别添加淘宝商品、抖音视频和小红书笔记搜索 MCP。它们与“小红书电脑 Bridge”是不同连接，不会用打开 App、Deep Link 或普通网页搜索冒充平台搜索。
 - BabyLink 接受公开的 HTTPS MCP Streamable HTTP 地址，也允许 `http://localhost`、`http://127.0.0.1` 和 `http://[::1]` 连接同一台设备上的 MCP；本机服务需允许 BabyLink 来源的 CORS 请求。手机中的回环地址指手机自身，不能借此访问电脑；局域网地址和本地 stdio 仍不能直接使用，跨设备自托管服务必须通过 HTTPS 反向代理增加访问鉴权。
 - 淘宝模板参考 [liuliang520530/taoke-mcp](https://github.com/liuliang520530/taoke-mcp) 的淘宝联盟物料搜索。该社区实现需要淘宝联盟 `TAOBAO_PID`、`TAOBAO_SESSION`，并依赖 `ENV_URL`、`ENV_SECRET` 对应的第三方配置服务；部署者需要自行审计并把全部凭据保存在 MCP 服务端。

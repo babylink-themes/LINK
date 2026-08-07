@@ -21,7 +21,7 @@
         <div><span>PHONE ACCESS</span><h2>手机系统权限</h2></div>
         <button type="button" :disabled="requestingPermission" @click="requestAllPermissions">授权常规权限</button>
       </header>
-      <p>通知、日历、通讯录和位置会依次由系统确认；“使用情况访问”和“通知使用权”是 Android 特殊权限，会跳转系统设置。</p>
+      <p>通知、日历、通讯录和位置会依次由系统确认；“使用情况访问”是 Android 特殊权限，会跳转系统设置。</p>
       <div class="mcp-permission-list">
         <article v-for="permission in permissions" :key="permission.id" class="mcp-permission-row">
           <span><strong>{{ permission.label }}</strong><small>{{ permission.detail }}</small></span>
@@ -62,7 +62,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, type Component } from 'vue';
-import { BarChart3, BellRing, CalendarDays, CheckCircle2, Clipboard, ClipboardPaste, CloudSun, ContactRound, FileText, Globe2, LocateFixed, MapPinned, MessageCircle, Navigation, Newspaper, PhoneCall, Search, Settings2, ShieldCheck, ShoppingBasket, Smartphone, Volume2, Vibrate } from 'lucide-vue-next';
+import { BarChart3, BellRing, CalendarDays, CheckCircle2, Clipboard, ClipboardPaste, CloudSun, ContactRound, FileText, Globe2, LocateFixed, MapPinned, MessageCircle, Newspaper, Search, Settings2, ShieldCheck, Smartphone, Volume2, Vibrate } from 'lucide-vue-next';
 import type { McpToolDefinition } from '@/types/domain';
 import { getRealityMcpPermissionStatus, requestAllRealityMcpPermissions, requestRealityMcpPermission, type RealityPermissionId, type RealityPermissionStatus } from '@/services/realityMcp';
 
@@ -87,39 +87,16 @@ const categories: { id: CategoryId; label: string }[] = [
 
 const toolPresentation: Record<string, { category: Exclude<CategoryId, 'all'>; icon: Component }> = {
   get_device_status: { category: 'device', icon: Smartphone },
-  get_app_usage_access: { category: 'device', icon: BarChart3 },
-  request_app_usage_access: { category: 'device', icon: Settings2 },
   get_app_usage: { category: 'device', icon: BarChart3 },
-  get_app_usage_report: { category: 'device', icon: BarChart3 },
-  get_notification_inbox_access: { category: 'device', icon: BellRing },
-  request_notification_inbox_access: { category: 'device', icon: Settings2 },
-  get_notification_inbox: { category: 'device', icon: BellRing },
-  clear_notification_inbox: { category: 'device', icon: BellRing },
-  prepare_date_plan: { category: 'places', icon: MapPinned },
-  prepare_trip_plan: { category: 'places', icon: Navigation },
-  prepare_shopping_plan: { category: 'productivity', icon: ShoppingBasket },
-  prepare_study_session: { category: 'productivity', icon: BarChart3 },
-  prepare_watch_together: { category: 'productivity', icon: CalendarDays },
-  get_nightly_brief: { category: 'productivity', icon: CloudSun },
-  set_cooking_timer: { category: 'productivity', icon: BellRing },
   add_music_to_queue: { category: 'communication', icon: Volume2 },
   notify_user: { category: 'device', icon: BellRing },
   speak_to_user: { category: 'device', icon: Volume2 },
   vibrate_phone: { category: 'device', icon: Vibrate },
   set_reminder: { category: 'productivity', icon: BellRing },
   list_reminders: { category: 'productivity', icon: BellRing },
-  update_reminder: { category: 'productivity', icon: BellRing },
-  complete_reminder: { category: 'productivity', icon: CheckCircle2 },
-  snooze_reminder: { category: 'productivity', icon: BellRing },
-  cancel_reminder: { category: 'productivity', icon: BellRing },
   create_calendar_event: { category: 'productivity', icon: CalendarDays },
   get_calendar_events: { category: 'productivity', icon: CalendarDays },
-  update_calendar_event: { category: 'productivity', icon: CalendarDays },
-  delete_calendar_event: { category: 'productivity', icon: CalendarDays },
-  check_calendar_conflicts: { category: 'productivity', icon: CalendarDays },
-  find_calendar_free_time: { category: 'productivity', icon: CalendarDays },
   create_memo: { category: 'productivity', icon: FileText },
-  list_memos: { category: 'productivity', icon: FileText },
   pick_contact: { category: 'communication', icon: ContactRound },
   search_contacts: { category: 'communication', icon: Search },
   create_contact: { category: 'communication', icon: ContactRound },
@@ -129,14 +106,10 @@ const toolPresentation: Record<string, { category: Exclude<CategoryId, 'all'>; i
   search_web: { category: 'online', icon: Globe2 },
   read_web_page: { category: 'online', icon: FileText },
   read_clipboard_text: { category: 'device', icon: ClipboardPaste },
-  analyze_clipboard: { category: 'device', icon: ClipboardPaste },
   write_clipboard_text: { category: 'device', icon: Clipboard },
   get_weather: { category: 'places', icon: CloudSun },
   search_nearby_places: { category: 'places', icon: MapPinned },
-  open_map_route: { category: 'places', icon: Navigation },
-  open_amap: { category: 'places', icon: MapPinned },
-  open_mobile_app: { category: 'communication', icon: Settings2 },
-  open_real_world_service: { category: 'communication', icon: PhoneCall }
+  open_mobile_app: { category: 'communication', icon: Settings2 }
 };
 
 const groupMetadata = {

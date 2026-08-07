@@ -32,6 +32,24 @@ const writableServer: McpServerConfig = {
 assert.deepEqual(suggestedAccountCapabilities('douyin', writableServer), ['like', 'comment']);
 assert.equal(findServerTool(writableServer, userSocialManualToolCandidates.douyin.like, true)?.name, 'douyin_like_video');
 
+const moltbookServer: McpServerConfig = {
+  ...writableServer,
+  id: 'moltbook-agent',
+  name: 'Moltbook · 角色 Agent',
+  kind: 'moltbook',
+  url: 'builtin://moltbook',
+  tools: [
+    { name: 'moltbook_upvote_post', title: '', description: '', inputSchema: {}, enabled: true, write: true },
+    { name: 'moltbook_create_post', title: '', description: '', inputSchema: {}, enabled: true, write: true },
+    { name: 'moltbook_create_comment', title: '', description: '', inputSchema: {}, enabled: true, write: true },
+    { name: 'moltbook_follow_agent', title: '', description: '', inputSchema: {}, enabled: true, write: true },
+    { name: 'moltbook_create_submolt', title: '', description: '', inputSchema: {}, enabled: true, write: true }
+  ],
+  moltbookAccountId: 'account-123'
+};
+
+assert.deepEqual(suggestedAccountCapabilities('moltbook', moltbookServer), ['like', 'publish', 'comment', 'follow', 'create-community']);
+
 const readServer: McpServerConfig = {
   ...writableServer,
   id: 'user-termux',
