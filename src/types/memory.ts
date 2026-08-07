@@ -1,4 +1,4 @@
-export type MemoryChannel = 'online' | 'offline' | 'group' | 'voom' | 'couple-space' | 'call' | 'system';
+export type MemoryChannel = 'chat' | 'online' | 'offline' | 'group' | 'voom' | 'couple-space' | 'call' | 'system';
 
 export type MemoryEntityType = 'character' | 'user' | 'person' | 'place' | 'object' | 'organization' | 'event' | 'concept';
 
@@ -19,6 +19,7 @@ export type MemoryEpisodeStatus = 'active' | 'forgotten';
 export type MemoryEpisodeForgottenReason = 'user-request' | 'source-invalidated';
 
 export type MemoryTemporalBasis = 'message-time' | 'sequence-only' | 'story-time';
+export type MemoryTimelineOrderBasis = 'conversation-order' | 'story-time' | 'recorded-time';
 
 export type MemoryLocationActor = 'character' | 'user' | 'shared-scene' | 'unknown';
 
@@ -72,6 +73,12 @@ export interface MemoryEpisode {
   occurredAt: number;
   occurredEndAt?: number;
   temporalBasis?: MemoryTemporalBasis;
+  timelineSequenceStart?: number;
+  timelineSequenceEnd?: number;
+  timelineOrderBasis?: MemoryTimelineOrderBasis;
+  sceneId?: string;
+  storyTime?: string;
+  storyTimeConfidence?: number;
   timeAwarenessEnabled?: boolean;
   timeZone?: string;
   generation?: MemoryGenerationMetadata;
@@ -110,6 +117,10 @@ export interface MemoryAssertion {
   relationshipImpact: number;
   evidenceMessageIds: string[];
   sourceEpisodeIds: string[];
+  timelineSequenceStart?: number;
+  timelineSequenceEnd?: number;
+  sceneId?: string;
+  storyTime?: string;
   themeIds: string[];
   searchText: string;
   validFrom: number;
@@ -169,6 +180,9 @@ export interface MemoryStateSnapshot {
   sourceAssertionIds: string[];
   sourceEpisodeIds: string[];
   previousSnapshotId?: string;
+  timelineSequence?: number;
+  sceneId?: string;
+  storyTime?: string;
   createdAt: number;
 }
 
@@ -244,6 +258,8 @@ export interface MemoryExtractionResult {
   valence: number;
   arousal: number;
   salience: number;
+  storyTime?: string;
+  storyTimeConfidence?: number;
   entities: MemoryExtractionEntityDraft[];
   assertions: MemoryExtractionAssertionDraft[];
   themes: string[];

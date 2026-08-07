@@ -51,7 +51,7 @@ interface MemoryStageGenerationMetadata {
   repairedJson: boolean;
 }
 
-export type TemporalMemoryDiaryResult = Pick<MemoryExtractionResult, 'title' | 'narrative' | 'location' | 'locations' | 'emotion' | 'valence' | 'arousal' | 'salience'> & { generation: MemoryStageGenerationMetadata };
+export type TemporalMemoryDiaryResult = Pick<MemoryExtractionResult, 'title' | 'narrative' | 'location' | 'locations' | 'storyTime' | 'storyTimeConfidence' | 'emotion' | 'valence' | 'arousal' | 'salience'> & { generation: MemoryStageGenerationMetadata };
 export type TemporalMemoryGraphResult = Pick<MemoryExtractionResult, 'entities' | 'assertions' | 'themes' | 'stateDeltas'> & { generation: MemoryStageGenerationMetadata };
 export interface TemporalMemoryExtractionResult extends MemoryExtractionResult {
   generation: MemoryGenerationMetadata;
@@ -66,6 +66,8 @@ export async function extractTemporalMemory(input: ExtractTemporalMemoryInput): 
     narrative: diary.narrative,
     location: diary.location,
     locations: diary.locations,
+    storyTime: diary.storyTime,
+    storyTimeConfidence: diary.storyTimeConfidence,
     emotion: diary.emotion,
     valence: diary.valence,
     arousal: diary.arousal,
@@ -205,7 +207,7 @@ function buildMemoryDiaryPrompt(input: ExtractTemporalMemoryInput): string {
   const messageRows = input.messages
     .map((message, index) => JSON.stringify({
       id: message.id,
-      order: index + 1,
+      order: message.timelineSequence ?? index + 1,
       sender: message.sender === 'user' ? input.userName : message.sender === 'char' ? input.characterName : '系统',
       mode: message.mode,
       ...(timeAwarenessEnabled ? { sentAt: formatMemoryMessageTime(message.createdAt) } : {}),
@@ -217,7 +219,7 @@ function buildMemoryDiaryPrompt(input: ExtractTemporalMemoryInput): string {
 用户真名是“${input.userName}”，不要用网名代指用户。
 
 写作要求：
-1. 只写下方对话里实际发生、${input.characterName}亲历或得知的内容，不补写未发生的事件。
+1. 只写下方对话里实际发生、${input.characterName}亲历或得知的内容，不补写未发生的事件；角色在聊天空档里的自主生活不能凭空写入永久日记。
 2. 保留事件顺序、${input.characterName}真正会注意的细节、感受、关系变化和未完成的牵挂；事件简单时一两句也可以，不要为了凑长度扩写。
 3. 使用${input.characterName}自然的第一人称口吻。title 和 narrative 必填，其余字段不适用时可留空或使用中性数值。
 4. location 只是兼容显示字段；locations 必须有消息证据。线上定位只属于发送者，不能据此认定双方共处；线下只有消息明确描述共同场景时才能使用 shared-scene。没有地点证据就输出空数组和空 location。
@@ -226,12 +228,16 @@ function buildMemoryDiaryPrompt(input: ExtractTemporalMemoryInput): string {
 时间规则：
 ${buildMemoryTemporalRules(input)}
 
+连续剧情规则：线上消息和线下 RP 消息属于同一个会话、同一条连续剧情；mode 只表示当时的呈现方式，不得因此把故事拆成两段，也不得因为模式切换重置人物关系、地点、事件顺序或记忆。只有正文明确写出的剧情时间才填写 storyTime；保存时间只能帮助确认消息先后。
+
 JSON 结构：
 {
   "title":"简短经历标题",
   "narrative":"完整的第一人称日记正文",
   "location":"有证据的主要地点或空字符串",
   "locations":[{"actor":"character|user|shared-scene|unknown","source":"attachment|explicit-text|offline-scene|inferred","label":"地点名","address":"可选地址","distance":"可选距离","evidenceMessageIds":["消息id"],"confidence":0到1}],
+  "storyTime":"正文明确写出的剧情时间；没有明确时间就留空",
+  "storyTimeConfidence":0到1,
   "emotion":"主要情绪或空字符串",
   "valence":-1到1,
   "arousal":0到1,
@@ -255,7 +261,7 @@ function buildMemoryGraphPrompt(input: ExtractTemporalMemoryInput): string {
   const messageRows = input.messages
     .map((message, index) => JSON.stringify({
       id: message.id,
-      order: index + 1,
+      order: message.timelineSequence ?? index + 1,
       sender: message.sender === 'user' ? input.userName : message.sender === 'char' ? input.characterName : '系统',
       mode: message.mode,
       ...(timeAwarenessEnabled ? { sentAt: formatMemoryMessageTime(message.createdAt) } : {}),
@@ -292,6 +298,7 @@ function buildMemoryGraphPrompt(input: ExtractTemporalMemoryInput): string {
 11. entities 最多 8 条、assertions 最多 10 条、themes 最多 5 条、stateDeltas 最多 3 条；没有内容时输出空数组，不得省略字段。
 12. ${timeAwarenessEnabled ? '只有消息明确给出时间或可依据本轮本地时间可靠换算时，才填写 validFrom、validTo、dueAt。' : '时间感知已关闭：不得把“今天、昨天、明天、刚才”等相对表达擅自换算成绝对时间；除非消息直接给出绝对日期，否则省略 validFrom、validTo、dueAt。'}
 13. current-context 与 mood 只描述本轮短暂状态，禁止把旧地点或旧情绪写成永久当前状态。
+14. 线上与线下是同一会话的连续剧情；mode 只影响呈现和输出格式，不是两套互相隔离的记忆。
 
 JSON 结构：
 {
@@ -395,6 +402,8 @@ function pickTemporalMemoryDiary(result: MemoryExtractionResult, generation: Mem
     narrative: result.narrative,
     location: result.location,
     locations: result.locations,
+    storyTime: result.storyTime,
+    storyTimeConfidence: result.storyTimeConfidence,
     emotion: result.emotion,
     valence: result.valence,
     arousal: result.arousal,
@@ -415,6 +424,10 @@ function normalizeExtractionResult(raw: Record<string, unknown>): MemoryExtracti
     narrative,
     location: cleanText(raw.location, 80),
     locations: flexibleRecordArray(raw.locations ?? raw.locationEvidence, ['actor', 'source', 'label'], 'label').slice(0, 12).flatMap(normalizeLocationDraft),
+    storyTime: cleanText(raw.storyTime ?? raw.storyDate ?? raw.storyTimestamp, 120) || undefined,
+    storyTimeConfidence: cleanText(raw.storyTime ?? raw.storyDate ?? raw.storyTimestamp, 120)
+      ? clamp(raw.storyTimeConfidence, 0, 1)
+      : undefined,
     emotion: cleanText(raw.emotion, 80),
     valence: boundedNumber(raw.valence, -1, 1, 0),
     arousal: boundedNumber(raw.arousal, 0, 1, 0.25),

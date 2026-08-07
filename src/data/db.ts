@@ -3,6 +3,7 @@ import { toRaw } from 'vue';
 import type { AppSettings, AppSnapshot, CharacterProfile, ChatImageAttachment, ChatMessage, Conversation, ConversationSettings, FanficBook, FanficChapter, FanficComment, FanficGenerationJob, FanficTopic, FavoriteMessageRecord, GeneratedImageRecord, MusicCommentThread, MusicTrack, ProfileHomepageRecord, ProfileTheme, SmallTheater, SmallTheaterTopic, Sticker, StickerGroup, UserProfile, VisualProfile, VoomPost, WorldBookEntry } from '@/types/domain';
 import type { CommerceSnapshot, ShopCartItem, ShopMoment, ShopOrder, ShopProduct, ShopStorefront, ShopWishlistItem, WalletAccount, WalletTransaction } from '@/types/commerce';
 import type { MemoryAssertion, MemoryEdge, MemoryEmbeddingCache, MemoryEntity, MemoryEpisode, MemoryStateSnapshot, MemoryTheme } from '@/types/memory';
+import { normalizeConversationTimeline } from '@/utils/conversationTimeline';
 import type { RoleContentDraft, RoleOperationAuditEntry, RoleOperationPolicy, RoleOutboundTask, RoleSocialAccount, UserSocialAccount } from '@/types/roleOperations';
 import type { RuntimeWorkRecord } from '@/types/runtimeWork';
 import { compressInlineImageDataUrl } from '@/utils/imageFile';
@@ -19,7 +20,7 @@ interface LinkDb extends DBSchema {
   user: { key: string; value: UserProfile };
   characters: { key: string; value: CharacterProfile };
   conversations: { key: string; value: Conversation; indexes: { byChar: string } };
-  messages: { key: string; value: ChatMessage; indexes: { byConversation: string; byConversationCreatedAt: [string, number]; byCallState: [string, string]; byTransferStatus: string } };
+  messages: { key: string; value: ChatMessage; indexes: { byConversation: string; byConversationCreatedAt: [string, number]; byConversationTimelineSequence: [string, number]; byCallState: [string, string]; byTransferStatus: string } };
   voomPosts: { key: string; value: VoomPost; indexes: { byChar: string; byConversation: string } };
   profileThemes: { key: string; value: ProfileTheme; indexes: { byChar: string } };
   profileHomepages: { key: string; value: ProfileHomepageRecord; indexes: { byChar: string; byConversation: string } };
@@ -36,12 +37,12 @@ interface LinkDb extends DBSchema {
   stickerGroups: { key: string; value: StickerGroup };
   stickers: { key: string; value: Sticker };
   conversationSettings: { key: string; value: ConversationSettings };
-  memoryEpisodes: { key: string; value: MemoryEpisode; indexes: { byBrain: string; byConversation: string; byOccurredAt: number } };
+  memoryEpisodes: { key: string; value: MemoryEpisode; indexes: { byBrain: string; byConversation: string; byOccurredAt: number; byBrainTimelineSequence: [string, number] } };
   memoryEntities: { key: string; value: MemoryEntity; indexes: { byBrain: string } };
   memoryAssertions: { key: string; value: MemoryAssertion; indexes: { byBrain: string; bySubject: string; byUpdatedAt: number } };
   memoryEdges: { key: string; value: MemoryEdge; indexes: { byBrain: string; byFrom: string; byTo: string } };
   memoryThemes: { key: string; value: MemoryTheme; indexes: { byBrain: string } };
-  memoryStateSnapshots: { key: string; value: MemoryStateSnapshot; indexes: { byBrain: string; byKind: string } };
+  memoryStateSnapshots: { key: string; value: MemoryStateSnapshot; indexes: { byBrain: string; byKind: string; byBrainTimelineSequence: [string, number] } };
   memoryEmbeddings: { key: string; value: MemoryEmbeddingCache; indexes: { byBrain: string; byOwner: string } };
   generatedImages: { key: string; value: GeneratedImageRecord; indexes: { byProvider: string; byCreatedAt: number } };
   favorites: { key: string; value: FavoriteMessageRecord; indexes: { byConversation: string; byFavoritedAt: number } };
@@ -64,6 +65,7 @@ interface LinkDb extends DBSchema {
 }
 
 let dbPromise: Promise<IDBPDatabase<LinkDb>> | undefined;
+const messageTimelineLocks = new Map<string, Promise<void>>();
 let backupReadLockDepth = 0;
 let backupReadLockReleased: Promise<void> | null = null;
 let releaseBackupReadLock: (() => void) | null = null;
@@ -724,7 +726,7 @@ function migrateArchivedSummaries(database: IDBDatabase, transaction: IDBTransac
   entityRequest.onsuccess = () => { entities = entityRequest.result; finishMigration(); };
 }
 
-export const linkLocalDbVersion = 21;
+export const linkLocalDbVersion = 22;
 
 export function getDb() {
   dbPromise ??= openDB<LinkDb>('link-local-db', linkLocalDbVersion, {
@@ -742,6 +744,9 @@ export function getDb() {
       const messageStore = transaction.objectStore('messages');
       if (!messageStore.indexNames.contains('byConversationCreatedAt')) {
         messageStore.createIndex('byConversationCreatedAt', ['conversationId', 'createdAt']);
+      }
+      if (!messageStore.indexNames.contains('byConversationTimelineSequence')) {
+        messageStore.createIndex('byConversationTimelineSequence', ['conversationId', 'timelineSequence']);
       }
       if (!messageStore.indexNames.contains('byCallState')) {
         messageStore.createIndex('byCallState', ['call.direction', 'call.status']);
@@ -810,6 +815,9 @@ export function getDb() {
         store.createIndex('byBrain', 'brainId');
         store.createIndex('byConversation', 'conversationId');
         store.createIndex('byOccurredAt', 'occurredAt');
+        store.createIndex('byBrainTimelineSequence', ['brainId', 'timelineSequenceEnd']);
+      } else if (!transaction.objectStore('memoryEpisodes').indexNames.contains('byBrainTimelineSequence')) {
+        transaction.objectStore('memoryEpisodes').createIndex('byBrainTimelineSequence', ['brainId', 'timelineSequenceEnd']);
       }
       if (!db.objectStoreNames.contains('memoryEntities')) {
         const store = db.createObjectStore('memoryEntities', { keyPath: 'id' });
@@ -835,6 +843,9 @@ export function getDb() {
         const store = db.createObjectStore('memoryStateSnapshots', { keyPath: 'id' });
         store.createIndex('byBrain', 'brainId');
         store.createIndex('byKind', 'kind');
+        store.createIndex('byBrainTimelineSequence', ['brainId', 'timelineSequence']);
+      } else if (!transaction.objectStore('memoryStateSnapshots').indexNames.contains('byBrainTimelineSequence')) {
+        transaction.objectStore('memoryStateSnapshots').createIndex('byBrainTimelineSequence', ['brainId', 'timelineSequence']);
       }
       if (!db.objectStoreNames.contains('memoryEmbeddings')) {
         const store = db.createObjectStore('memoryEmbeddings', { keyPath: 'id' });
@@ -1511,6 +1522,36 @@ function stripVueProxy(value: unknown, seen: WeakMap<object, unknown>): unknown 
 export async function putEntity<TStore extends StoreName>(storeName: TStore, value: LinkDb[TStore]['value'], key?: LinkDb[TStore]['key']) {
   await waitForBackupReadLock();
   const db = await getDb();
+  if (storeName === 'messages') {
+    const message = value as ChatMessage;
+    const previous = messageTimelineLocks.get(message.conversationId) ?? Promise.resolve();
+    let release: (() => void) | undefined;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    messageTimelineLocks.set(message.conversationId, current);
+    await previous;
+    try {
+      const storedMessages = await db.getAllFromIndex('messages', 'byConversation', message.conversationId);
+      const normalizedMessages = normalizeConversationTimeline([...storedMessages.filter((entry) => entry.id !== message.id), message], message.conversationId);
+      const normalizedMessage = normalizedMessages.find((entry) => entry.id === message.id) ?? message;
+      Object.assign(message, normalizedMessage);
+      const changedMessages = normalizedMessages.filter((entry) => {
+        const previousEntry = storedMessages.find((stored) => stored.id === entry.id);
+        return JSON.stringify(previousEntry) !== JSON.stringify(entry);
+      });
+      const compactedMessages = await Promise.all(changedMessages.map(async (entry) => {
+        const compactedValue = await compactValueForStore('messages', entry);
+        const externalizedValue = await externalizeLargeMediaRefs(compactedValue);
+        return toPersistableValue(externalizedValue);
+      }));
+      const transaction = db.transaction('messages', 'readwrite');
+      await Promise.all(compactedMessages.map((entry) => transaction.objectStore('messages').put(entry as never)));
+      await transaction.done;
+      return;
+    } finally {
+      if (messageTimelineLocks.get(message.conversationId) === current) messageTimelineLocks.delete(message.conversationId);
+      release?.();
+    }
+  }
   const compactedValue = await compactValueForStore(storeName, value);
   const externalizedValue = await externalizeLargeMediaRefs(compactedValue);
   const persistableValue = toPersistableValue(externalizedValue);

@@ -40,6 +40,7 @@ import { collectStoredMediaLocators, hydrateStoredMediaRefs, isLocalMediaCacheUr
 import { normalizeCoupleSpaceState } from '@/utils/coupleSpace';
 import { applyGobangMove, createGobangGame, respondGobangInvitation, updateGobangApiState } from '@/utils/gobang';
 import { createMemoryAssertionDedupeKey, createMemoryBrainId, createMemorySourceHash, createRecallUpserts, estimateMemoryTokens, fadeMemoryAccessibility, hashMemoryText, integrateMemoryExtraction, isMemorySourceSnapshotCurrent, latestMemoryStates, memoryId, recallCharacterMemory, refreshMemoryThemeReports, resolveMemoryEpisodeForgottenReason } from '@/utils/memoryGraph';
+import { normalizeConversationTimeline } from '@/utils/conversationTimeline';
 import { consolidateMemoryThemeReport, extractTemporalMemory, generateTemporalMemoryDiary } from '@/services/memoryExtraction';
 import { registerTabooWorldBookProvider } from '@/services/tabooWorldBook';
 import { createUserTimeSnapshot } from '@/utils/timeAwareness';
@@ -866,6 +867,24 @@ export const useAppStore = defineStore('app', () => {
       .sort(compareConversationMessageOrder);
   }
 
+  function normalizeCompleteConversationMessages(entries: ChatMessage[]) {
+    const normalized = normalizeLoadedConversationMessages(entries);
+    const grouped = new Map<string, ChatMessage[]>();
+    normalized.forEach((message) => grouped.set(message.conversationId, [...(grouped.get(message.conversationId) ?? []), message]));
+    return [...grouped.values()].flatMap((conversationMessages) => normalizeConversationTimeline(conversationMessages, conversationMessages[0]?.conversationId));
+  }
+
+  async function ensureConversationTimeline(conversationId: string) {
+    const currentMessages = messagesForConversation(conversationId);
+    const normalizedMessages = normalizeConversationTimeline(currentMessages, conversationId);
+    const currentById = new Map(currentMessages.map((message) => [message.id, message]));
+    const changedMessages = normalizedMessages.filter((message) => JSON.stringify(message) !== JSON.stringify(currentById.get(message.id)));
+    if (!changedMessages.length) return normalizedMessages;
+    messages.value = messages.value.map((message) => changedMessages.find((changed) => changed.id === message.id) ?? message);
+    await Promise.all(changedMessages.map((message) => putEntity('messages', message)));
+    return normalizedMessages;
+  }
+
   function mergeConversationMessages(conversationId: string, nextMessages: ChatMessage[], options: { replace?: boolean } = {}) {
     const normalizedConversationId = conversationId.trim();
     if (!normalizedConversationId) return;
@@ -887,10 +906,10 @@ export const useAppStore = defineStore('app', () => {
     const loading = (async () => {
       const storedMessages = await loadAllMessagesByConversation(normalizedConversationId);
       const hydratedMessages = await hydrateStoredMediaRefs(storedMessages);
-      const nextMessages = normalizeLoadedConversationMessages(hydratedMessages);
+      const nextMessages = normalizeCompleteConversationMessages(hydratedMessages);
       mergeConversationMessages(normalizedConversationId, nextMessages, { replace: true });
       fullyLoadedConversationMessageIds.add(normalizedConversationId);
-      return nextMessages;
+      return await ensureConversationTimeline(normalizedConversationId);
     })().finally(() => {
       conversationMessageLoadPromises.delete(normalizedConversationId);
     });
@@ -918,7 +937,7 @@ export const useAppStore = defineStore('app', () => {
     allMessagesPromise = (async () => {
       const storedMessages = await loadAllMessages();
       const hydratedMessages = await hydrateStoredMediaRefs(storedMessages);
-      const nextMessages = normalizeLoadedConversationMessages(hydratedMessages);
+      const nextMessages = normalizeCompleteConversationMessages(hydratedMessages);
       messages.value = nextMessages;
       fullyLoadedConversationMessageIds.clear();
       conversations.value.forEach((conversation) => fullyLoadedConversationMessageIds.add(conversation.id));
@@ -1062,18 +1081,14 @@ export const useAppStore = defineStore('app', () => {
         .flatMap((episode) => episode.sourceMessageIds)
     );
     const recallableMessages = activeMessages.filter((message) => !forgottenMessageIds.has(message.id));
-    if (!memorySettings.enabled || !memorySettings.compressionEnabled) {
-      return recallableMessages;
-    }
+    const recentMessages = getRecentCompleteFloorMessages(recallableMessages, memorySettings.recentFloorLimit);
+    if (!memorySettings.enabled || !memorySettings.compressionEnabled) return recentMessages;
     const archivedMessageIds = new Set(
       conversationEpisodes
         .filter((episode) => episode.status === 'active')
         .flatMap((episode) => episode.sourceMessageIds)
     );
-    if (!archivedMessageIds.size && !forgottenMessageIds.size) return recallableMessages;
-    const recentMessageIds = new Set(
-      getRecentCompleteFloorMessages(recallableMessages, memorySettings.recentFloorLimit).map((message) => message.id)
-    );
+    const recentMessageIds = new Set(recentMessages.map((message) => message.id));
     return recallableMessages.filter((message) => !forgottenMessageIds.has(message.id)
       && (!archivedMessageIds.has(message.id) || recentMessageIds.has(message.id)));
   }
@@ -1138,7 +1153,10 @@ export const useAppStore = defineStore('app', () => {
   }
 
   function memoryTimelineForConversation(id: string) {
-    return [...memoryGraphForConversation(id).episodes].sort((left, right) => right.occurredAt - left.occurredAt);
+    return [...memoryGraphForConversation(id).episodes].sort((left, right) =>
+      (right.timelineSequenceEnd ?? right.endFloor) - (left.timelineSequenceEnd ?? left.endFloor)
+      || right.occurredAt - left.occurredAt
+    );
   }
 
   function memoryThemesForConversation(id: string) {
@@ -1146,7 +1164,9 @@ export const useAppStore = defineStore('app', () => {
   }
 
   function memoryStatesForConversation(id: string) {
-    return latestMemoryStates(memoryGraphForConversation(id).stateSnapshots);
+    const normalizedMessages = normalizeConversationTimeline(messagesForConversation(id), id);
+    const currentMessage = normalizedMessages.at(-1);
+    return latestMemoryStates(memoryGraphForConversation(id).stateSnapshots, currentMessage?.timelineSequence, currentMessage?.sceneId);
   }
 
   function recallMemoryForConversation(id: string, queryText = ''): MemoryRecallResult {
@@ -1158,7 +1178,9 @@ export const useAppStore = defineStore('app', () => {
       brainId: graph.brainId,
       query: queryText,
       maxTokens: budgetTokens,
-      timeAwarenessEnabled: settingsForConversation(id).timeAwareness.enabled
+      timeAwarenessEnabled: settingsForConversation(id).timeAwareness.enabled,
+      currentTimelineSequence: normalizeConversationTimeline(messagesForConversation(id), id).at(-1)?.timelineSequence,
+      currentSceneId: normalizeConversationTimeline(messagesForConversation(id), id).at(-1)?.sceneId
     });
   }
 
@@ -1181,7 +1203,9 @@ export const useAppStore = defineStore('app', () => {
           brainId: graph.brainId,
           query: memoryRecallQueryForMessages(activeMessages),
           maxTokens: memorySettings.recallTokenBudget,
-          timeAwarenessEnabled: settingsForConversation(id).timeAwareness.enabled
+          timeAwarenessEnabled: settingsForConversation(id).timeAwareness.enabled,
+          currentTimelineSequence: normalizeConversationTimeline(activeMessages, id).at(-1)?.timelineSequence,
+          currentSceneId: normalizeConversationTimeline(activeMessages, id).at(-1)?.sceneId
         })
       : null;
     return {
@@ -1246,7 +1270,9 @@ export const useAppStore = defineStore('app', () => {
       query: queryText,
       maxTokens: options.maxTokens ?? memorySettings.recallTokenBudget,
       queryVector,
-      timeAwarenessEnabled: settingsForConversation(id).timeAwareness.enabled
+      timeAwarenessEnabled: settingsForConversation(id).timeAwareness.enabled,
+      currentTimelineSequence: normalizeConversationTimeline(messagesForConversation(id), id).at(-1)?.timelineSequence,
+      currentSceneId: normalizeConversationTimeline(messagesForConversation(id), id).at(-1)?.sceneId
     });
     const now = Date.now();
     const recalled = createRecallUpserts(recall.items, now);
@@ -1325,6 +1351,7 @@ export const useAppStore = defineStore('app', () => {
     const memoryQueryText = memoryRecallQueryForMessages(conversationMessages);
     const chatSettings = settingsForConversation(conversationId);
     const promptMessages = promptMessagesForConversation(conversationId);
+    const promptFloorCount = getConversationFloorCount(promptMessages);
     const modelOverride = getConversationTextModelOverride(chatSettings, mode);
     const availableCharacterStickers = stickersForGroups(chatSettings.characterStickerGroupIds);
     const activeProfileTheme = mode === 'online'
@@ -1359,10 +1386,13 @@ export const useAppStore = defineStore('app', () => {
         boundUser,
         mode,
         messages: promptMessages,
-        historyMessageLimit: promptMessages.length,
         worldBooks: worldBooks.value,
         conversationSummary: conversation.summary,
         memorySummary,
+        historyMessageLimit: promptMessages.length,
+        historyFloorLimit: chatSettings.memory.recentFloorLimit,
+        historyFloorCount: promptFloorCount,
+        historyMessageCount: promptMessages.length,
         stickerVisionEnabled: chatSettings.stickerVisionEnabled,
         narrationModeEnabled: chatSettings.narrationModeEnabled,
         offlineInvitationEnabled: chatSettings.offlineInvitationEnabled,
@@ -1437,6 +1467,9 @@ export const useAppStore = defineStore('app', () => {
       mode: conversation.activeMode,
       messages: promptMessages,
       historyMessageLimit: promptMessages.length,
+      historyFloorLimit: chatSettings.memory.recentFloorLimit,
+      historyFloorCount: getConversationFloorCount(promptMessages),
+      historyMessageCount: promptMessages.length,
       worldBooks: worldBooks.value,
       conversationSummary: conversation.summary,
       memorySummary: memoryContextForConversation(id, userMessageText, { storeDebug: false }),
@@ -7514,7 +7547,7 @@ export const useAppStore = defineStore('app', () => {
     if (conversation.kind === 'group') return 'group';
     if (sourceMessages.some((message) => message.call || message.callId)) return 'call';
     if (sourceMessages.some((message) => message.voomPostId || message.voomCommentId)) return 'voom';
-    return sourceMessages.at(-1)?.mode === 'offline' ? 'offline' : 'online';
+    return 'chat';
   }
 
   async function persistMemoryGraphUpserts(upserts: ReturnType<typeof integrateMemoryExtraction>) {
@@ -7644,6 +7677,7 @@ export const useAppStore = defineStore('app', () => {
 
   async function captureConversationMemory(conversationId: string, options: { force?: boolean; bypassBrainLock?: boolean } = {}): Promise<MemoryEpisode | null> {
     await ensureConversationMessagesLoaded(conversationId);
+    await ensureConversationTimeline(conversationId);
     const conversation = conversationById(conversationId);
     const character = conversation ? characterById(conversation.charId) : null;
     const boundUser = conversation ? userById(conversation.userId) : null;
@@ -7733,6 +7767,8 @@ export const useAppStore = defineStore('app', () => {
     if (existingEpisode) return existingEpisode;
     const startFloor = selectedFloors[0].floor;
     const endFloor = selectedFloors[selectedFloors.length - 1].floor;
+    const timelineSequenceStart = Math.min(...sourceMessages.map((message, index) => message.timelineSequence ?? index + 1));
+    const timelineSequenceEnd = Math.max(...sourceMessages.map((message, index) => message.timelineSequence ?? index + 1));
     const characterName = getCharacterAiName(character);
     const userName = getUserAiName(boundUser);
     capturingMemoryConversationIds.add(conversationId);
@@ -7813,6 +7849,8 @@ export const useAppStore = defineStore('app', () => {
         endFloor,
         channel: memoryChannelForConversation(conversation, sourceMessages),
         sourceMessages,
+        timelineSequenceStart,
+        timelineSequenceEnd,
         extraction,
         timeAwarenessEnabled: chatSettings.timeAwareness.enabled,
         timeZone: timeSnapshot.timeZone,
@@ -8136,6 +8174,8 @@ export const useAppStore = defineStore('app', () => {
         endFloor: episode.endFloor,
         channel: memoryChannelForConversation(conversation, sourceMessages),
         sourceMessages,
+        timelineSequenceStart: Math.min(...sourceMessages.map((message, index) => message.timelineSequence ?? index + 1)),
+        timelineSequenceEnd: Math.max(...sourceMessages.map((message, index) => message.timelineSequence ?? index + 1)),
         existingEpisode: episode,
         extraction: {
           ...diary,

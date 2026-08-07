@@ -15,6 +15,7 @@ import type {
   MemoryStateKind,
   MemoryStateSnapshot,
   MemoryTheme,
+  MemoryTemporalBasis,
 } from '@/types/memory';
 import { normalizeChatMemorySetting } from '@/utils/memorySettings';
 import { normalizeNarrativeText } from '@/utils/structuredText';
@@ -41,6 +42,8 @@ export interface IntegrateMemoryExtractionInput extends MemoryGraphCollections {
   conversationId: string;
   startFloor: number;
   endFloor: number;
+  timelineSequenceStart?: number;
+  timelineSequenceEnd?: number;
   channel: MemoryEpisode['channel'];
   sourceMessages: ChatMessage[];
   extraction: MemoryExtractionResult;
@@ -67,6 +70,8 @@ export interface RecallCharacterMemoryInput extends MemoryGraphCollections {
   embeddings?: MemoryEmbeddingCache[];
   queryVector?: number[];
   timeAwarenessEnabled?: boolean;
+  currentTimelineSequence?: number;
+  currentSceneId?: string;
 }
 
 export function createMemoryBrainId(characterId: string, userId: string): string {
@@ -228,6 +233,23 @@ export function integrateMemoryExtraction(input: IntegrateMemoryExtractionInput)
   const themeUpserts: MemoryTheme[] = [];
   const stateUpserts: MemoryStateSnapshot[] = [];
   const episodeLocations = resolveEpisodeLocations(input);
+  const sharedSceneLocation = episodeLocations.find((location) => location.actor === 'shared-scene');
+  const storyTime = cleanText(input.extraction.storyTime, 120) || undefined;
+  const storyTimeConfidence = storyTime ? clamp(input.extraction.storyTimeConfidence, 0, 1) : undefined;
+  const hasOfflineMessages = sourceMessages.some((message) => message.mode === 'offline');
+  const sceneId = sourceMessages.map((message) => message.sceneId?.trim()).find(Boolean) || undefined;
+  const temporalBasis: MemoryTemporalBasis = storyTime
+    ? 'story-time'
+    : input.timeAwarenessEnabled && !hasOfflineMessages
+      ? 'message-time'
+      : 'sequence-only';
+  const assertionTime = temporalBasis === 'sequence-only' ? 0 : occurredAt;
+  const firstRecordedAt = sourceMessages.length
+    ? Math.min(...sourceMessages.map((message) => Number(message.createdAt) || now))
+    : now;
+  const lastRecordedAt = sourceMessages.length
+    ? Math.max(...sourceMessages.map((message) => Number(message.createdAt) || firstRecordedAt))
+    : firstRecordedAt;
   const scopedEntities = input.entities.filter((entity) => entity.brainId === input.brainId);
   const entityById = new Map(scopedEntities.map((entity) => [entity.id, entity]));
   const entityByName = new Map<string, MemoryEntity>();
@@ -265,7 +287,7 @@ export function integrateMemoryExtraction(input: IntegrateMemoryExtractionInput)
     sourceTokenEstimate: estimateMemoryTokens(sourceMessages.map((message) => String(message.content ?? '')).join('\n')),
     title: cleanText(input.extraction.title, 80) || '一段共同经历',
     narrative: normalizeNarrativeText(input.extraction.narrative) || '我记得我们有过一段交流。',
-    location: episodeLocations.at(-1)?.label || validatedLegacyLocation(input),
+    location: sharedSceneLocation?.label || (episodeLocations.length === 1 ? episodeLocations[0].label : validatedLegacyLocation(input)),
     locations: episodeLocations,
     emotion: cleanText(input.extraction.emotion, 80),
     valence: clamp(input.extraction.valence, -1, 1),
@@ -273,11 +295,17 @@ export function integrateMemoryExtraction(input: IntegrateMemoryExtractionInput)
     salience: clamp(input.extraction.salience, 0, 1),
     participantEntityIds: [],
     themeIds: [],
-    occurredAt,
+    occurredAt: firstRecordedAt,
     occurredEndAt: sourceMessages.length
-      ? Math.max(...sourceMessages.map((message) => Number(message.createdAt) || occurredAt))
-      : occurredAt,
-    temporalBasis: input.channel === 'offline' ? 'sequence-only' : input.timeAwarenessEnabled ? 'message-time' : 'sequence-only',
+      ? lastRecordedAt
+      : firstRecordedAt,
+    temporalBasis,
+    timelineSequenceStart: input.timelineSequenceStart ?? Math.max(1, Math.round(input.startFloor) || 1),
+    timelineSequenceEnd: input.timelineSequenceEnd ?? Math.max(1, Math.round(input.endFloor) || 1),
+    timelineOrderBasis: 'conversation-order',
+    sceneId,
+    storyTime,
+    storyTimeConfidence,
     timeAwarenessEnabled: Boolean(input.timeAwarenessEnabled),
     timeZone: input.timeZone,
     generation: input.extraction.generation,
@@ -330,7 +358,8 @@ export function integrateMemoryExtraction(input: IntegrateMemoryExtractionInput)
     }
     const existing = currentAssertions.find((item) => assertionDedupeKey(item.subjectEntityId, item.predicate, item.objectEntityId || item.objectText, item.kind) === dedupeKey);
     let assertion: MemoryAssertion;
-    if (existing) {
+    const existingBelongsToEpisode = Boolean(existing?.sourceEpisodeIds.includes(episode.id));
+    if (existing && existingBelongsToEpisode) {
       assertion = {
         ...existing,
         perspectiveText,
@@ -363,9 +392,13 @@ export function integrateMemoryExtraction(input: IntegrateMemoryExtractionInput)
         relationshipImpact: clamp(draft.relationshipImpact, -1, 1),
         evidenceMessageIds,
         sourceEpisodeIds: [episode.id],
+        timelineSequenceStart: episode.timelineSequenceStart,
+        timelineSequenceEnd: episode.timelineSequenceEnd,
+        sceneId: episode.sceneId,
+        storyTime: episode.storyTime,
         themeIds: assertionThemeIds,
         searchText: buildAssertionSearchText(subject.name, predicate, objectText, perspectiveText),
-        validFrom: finiteTime(draft.validFrom) ?? occurredAt,
+        validFrom: finiteTime(draft.validFrom) ?? assertionTime,
         validTo: finiteTime(draft.validTo),
         dueAt: finiteTime(draft.dueAt),
         learnedAt: now,
@@ -375,6 +408,17 @@ export function integrateMemoryExtraction(input: IntegrateMemoryExtractionInput)
         pinned: false,
         accessibility: Math.max(0.25, clamp(draft.importance, 0, 1)),
       };
+      if (existing && (existing.status === 'current' || existing.status === 'open' || existing.status === 'disputed')) {
+        const replacementTime = assertion.validFrom || occurredAt;
+        assertionUpserts.push({
+          ...existing,
+          status: existing.status === 'disputed' ? 'disputed' : 'superseded',
+          validTo: replacementTime || undefined,
+          supersededById: assertion.id,
+          updatedAt: now
+        });
+        edgeUpserts.push(createEdge(input.brainId, assertion.id, existing.id, 'supersedes', now, assertion.confidence));
+      }
     }
     assertionUpserts.push(assertion);
     edgeUpserts.push(createEdge(input.brainId, episode.id, assertion.id, 'supports', now, assertion.confidence));
@@ -394,7 +438,7 @@ export function integrateMemoryExtraction(input: IntegrateMemoryExtractionInput)
     for (const supersededId of draft.supersedesAssertionIds ?? []) {
       const previous = assertionById.get(supersededId);
       if (!previous || previous.status !== 'current') continue;
-      assertionUpserts.push({ ...previous, status: 'superseded', supersededById: assertion.id, validTo: finiteTime(draft.validFrom) ?? occurredAt, updatedAt: now });
+      assertionUpserts.push({ ...previous, status: 'superseded', supersededById: assertion.id, validTo: (finiteTime(draft.validFrom) ?? assertionTime) || undefined, updatedAt: now });
       edgeUpserts.push(createEdge(input.brainId, assertion.id, previous.id, 'supersedes', now, assertion.confidence));
     }
     for (const contradictedId of draft.contradictsAssertionIds ?? []) {
@@ -427,9 +471,13 @@ export function integrateMemoryExtraction(input: IntegrateMemoryExtractionInput)
       relationshipImpact: 0,
       evidenceMessageIds: sourceMessageIds,
       sourceEpisodeIds: [episode.id],
+      timelineSequenceStart: episode.timelineSequenceStart,
+      timelineSequenceEnd: episode.timelineSequenceEnd,
+      sceneId: episode.sceneId,
+      storyTime: episode.storyTime,
       themeIds: [],
       searchText: buildAssertionSearchText(selfEntity.name, '共同经历', episode.title, perspectiveText),
-      validFrom: occurredAt,
+      validFrom: assertionTime,
       learnedAt: now,
       recallCount: 0,
       pinned: false,
@@ -571,7 +619,7 @@ function reduceMemoryStates(
   for (const [kind, deltas] of deltasByKind.entries()) {
     const previous = input.stateSnapshots
       .filter((snapshot) => snapshot.brainId === input.brainId && snapshot.kind === kind)
-      .sort((left, right) => right.createdAt - left.createdAt)[0];
+      .sort((left, right) => (right.timelineSequence ?? 0) - (left.timelineSequence ?? 0) || right.createdAt - left.createdAt)[0];
     const alpha = stateLearningRate(kind);
     const facets = new Map((previous?.facets ?? []).map((facet) => [normalizeMemoryName(facet.key), facet]));
     for (const delta of deltas) {
@@ -601,7 +649,10 @@ function reduceMemoryStates(
       facets: [...facets.values()],
       sourceAssertionIds: evidenceAssertionIds,
       sourceEpisodeIds: [episode.id],
+      sceneId: episode.sceneId,
       previousSnapshotId: previous?.id,
+      timelineSequence: episode.timelineSequenceEnd,
+      storyTime: episode.storyTime,
       createdAt: now,
     });
   }
@@ -703,8 +754,11 @@ export function recallCharacterMemory(input: RecallCharacterMemoryInput): Memory
       && selectedEpisodeIds.includes(episode.id)
       && episode.status === 'active'
       && !forgottenSourceEpisodeIds.has(episode.id))
-    .sort((left, right) => right.occurredAt - left.occurredAt);
-  const latestStates = latestMemoryStates(input.stateSnapshots.filter((item) => item.brainId === input.brainId))
+    .sort((left, right) =>
+      (right.timelineSequenceEnd ?? right.endFloor) - (left.timelineSequenceEnd ?? left.endFloor)
+      || right.occurredAt - left.occurredAt
+    );
+  const latestStates = latestMemoryStates(input.stateSnapshots.filter((item) => item.brainId === input.brainId), input.currentTimelineSequence, input.currentSceneId)
     .filter((state) => isMemoryStateFresh(state, now, timeAwarenessEnabled));
   const activeThemeIds = unique(selected.flatMap((item) => item.assertion.themeIds));
   const selectedThemes = input.themes
@@ -742,11 +796,19 @@ export function createRecallUpserts(items: MemoryRecallItem[], now = Date.now())
   }));
 }
 
-export function latestMemoryStates(snapshots: MemoryStateSnapshot[]): MemoryStateSnapshot[] {
+export function latestMemoryStates(snapshots: MemoryStateSnapshot[], currentTimelineSequence?: number, currentSceneId?: string): MemoryStateSnapshot[] {
   const latest = new Map<MemoryStateKind, MemoryStateSnapshot>();
   for (const snapshot of snapshots) {
+    if (Number.isFinite(currentTimelineSequence) && Number.isFinite(snapshot.timelineSequence)
+      && Number(snapshot.timelineSequence) > Number(currentTimelineSequence)) continue;
+    if (currentSceneId && snapshot.sceneId && snapshot.sceneId !== currentSceneId
+      && (snapshot.kind === 'mood' || snapshot.kind === 'current-context')) continue;
     const current = latest.get(snapshot.kind);
-    if (!current || current.createdAt < snapshot.createdAt) latest.set(snapshot.kind, snapshot);
+    if (!current
+      || (snapshot.timelineSequence ?? 0) > (current.timelineSequence ?? 0)
+      || ((snapshot.timelineSequence ?? 0) === (current.timelineSequence ?? 0) && current.createdAt < snapshot.createdAt)) {
+      latest.set(snapshot.kind, snapshot);
+    }
   }
   return [...latest.values()].sort((left, right) => left.kind.localeCompare(right.kind));
 }
@@ -825,7 +887,7 @@ function formatMemoryContext(
   const sections: MemoryContextSection[] = [
     {
       key: 'states',
-      title: '此刻的关系与状态',
+      title: '当前剧情位置的关系与状态',
       weight: 0.1,
       entries: states
         .filter((state) => state.summary)
@@ -858,17 +920,17 @@ function formatMemoryContext(
       const disputed = assertion.status === 'disputed' ? '；有矛盾' : '';
       return {
         id: assertion.id,
-        text: `${cleanText(assertion.perspectiveText, 220)}（${subject}；${certainty}${timeAwarenessEnabled ? `；${relativeTime(assertion.validFrom, now)}` : ''}${disputed}；确信${Math.round(assertion.confidence * 100)}%）`,
+        text: `${cleanText(assertion.perspectiveText, 220)}（${subject}；${certainty}${assertion.storyTime ? `；剧情时间：${cleanText(assertion.storyTime, 80)}` : timeAwarenessEnabled && assertion.validFrom > 0 ? `；${relativeTime(assertion.validFrom, now)}` : ''}${disputed}；确信${Math.round(assertion.confidence * 100)}%）`,
       };
       }),
     },
     {
       key: 'episodes',
-      title: '相关日记片段',
+      title: '过去的相关日记片段',
       weight: 0.2,
       entries: episodes.map((episode) => ({
         id: episode.id,
-        text: `${timeAwarenessEnabled ? `${relativeTime(episode.occurredAt, now)}，` : ''}${cleanText(episode.title, 80)}：${cleanText(episode.narrative, 320)}`,
+        text: `${timeAwarenessEnabled && episode.temporalBasis === 'message-time' ? `${relativeTime(episode.occurredAt, now)}，` : ''}${cleanText(episode.title, 80)}：${cleanText(episode.narrative, 320)}`,
       })),
     },
   ];

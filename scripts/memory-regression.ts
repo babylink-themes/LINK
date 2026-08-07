@@ -3,9 +3,10 @@ import type { ChatMessage } from '../src/types/domain.ts';
 import type { MemoryAssertion, MemoryEpisode, MemoryExtractionResult, MemoryTheme } from '../src/types/memory.ts';
 import { getConversationFloors, getRecentCompleteFloorMessages, resolveMemoryEpisodeFloorRange } from '../src/utils/memoryFloors.ts';
 import { selectMemoryCaptureFloors } from '../src/utils/memoryCapture.ts';
-import { createMemoryAssertionDedupeKey, createMemorySourceHash, integrateMemoryExtraction, isMemorySourceSnapshotCurrent, recallCharacterMemory, resolveMemoryEpisodeForgottenReason } from '../src/utils/memoryGraph.ts';
+import { createMemoryAssertionDedupeKey, createMemorySourceHash, integrateMemoryExtraction, isMemorySourceSnapshotCurrent, latestMemoryStates, recallCharacterMemory, resolveMemoryEpisodeForgottenReason } from '../src/utils/memoryGraph.ts';
 import { applyCurrentChatMemoryDefaults, normalizeChatMemorySetting } from '../src/utils/memorySettings.ts';
 import { extractCompleteJsonObject, normalizeNarrativeText } from '../src/utils/structuredText.ts';
+import { normalizeConversationTimeline } from '../src/utils/conversationTimeline.ts';
 
 function message(id: string, sender: ChatMessage['sender'], mode: ChatMessage['mode'], createdAt: number, extra: Partial<ChatMessage> = {}): ChatMessage {
   return {
@@ -43,6 +44,22 @@ const mixedFloors = getConversationFloors(mixedMessages);
 assert.deepEqual(mixedFloors.map((floor) => floor.map((item) => item.id)), [['u1', 'u2'], ['c1', 'c2'], ['u3'], ['c3']]);
 assert.deepEqual(getRecentCompleteFloorMessages(mixedMessages, 3).map((item) => item.id), ['c1', 'c2', 'u3', 'c3']);
 assert.deepEqual(getRecentCompleteFloorMessages(mixedMessages, 2).map((item) => item.id), ['u3', 'c3']);
+
+const modeSwitchFloor = getConversationFloors([
+  message('switch-u1', 'user', 'online', 1),
+  message('switch-c1', 'char', 'offline', 2, { replyBatchId: 'switch-reply' }),
+  message('switch-c2', 'char', 'online', 3, { replyBatchId: 'switch-reply' }),
+  message('switch-u2', 'user', 'offline', 4),
+]);
+assert.deepEqual(modeSwitchFloor.map((floor) => floor.map((item) => item.id)), [['switch-u1'], ['switch-c1', 'switch-c2'], ['switch-u2']]);
+
+const timelineMessages = normalizeConversationTimeline([
+  message('timeline-u1', 'user', 'online', 1),
+  message('timeline-c1', 'char', 'offline', 2),
+  message('timeline-u2', 'user', 'online', 3),
+], 'conversation');
+assert.deepEqual(timelineMessages.map((item) => item.timelineSequence), [1, 2, 3]);
+assert.equal(new Set(timelineMessages.map((item) => item.sceneId)).size, 1);
 
 const pendingTurn = getConversationFloors([
   message('u1', 'user', 'online', 1),
@@ -128,7 +145,7 @@ const graphInput = {
   conversationId: 'conversation',
   startFloor: 1,
   endFloor: 1,
-  channel: 'online' as const,
+  channel: 'chat' as const,
   sourceMessages: [message('source-1', 'user', 'online', Date.now(), { content: '我们聊了公园散步。' })],
   episodes: [],
   entities: [],
@@ -142,6 +159,10 @@ const graphInput = {
 const firstGraph = integrateMemoryExtraction({ ...graphInput, extraction: emptyExtraction(`${'长日记内容。'.repeat(1_000)}\n\n最后一句保留。`) });
 assert.ok(firstGraph.episode.narrative.length > 5_000);
 assert.ok(firstGraph.episode.narrative.endsWith('最后一句保留。'));
+assert.equal(firstGraph.episode.channel, 'chat');
+assert.equal(firstGraph.episode.temporalBasis, 'sequence-only');
+assert.equal(firstGraph.episode.storyTime, undefined);
+assert.equal(firstGraph.assertions[0]?.validFrom, 0);
 const repeatedGraph = integrateMemoryExtraction({
   ...graphInput,
   episodes: [firstGraph.episode],
@@ -239,6 +260,23 @@ const offlineLocationGraph = integrateMemoryExtraction({
   }
 });
 assert.equal(offlineLocationGraph.episode.locations?.some((location) => location.actor === 'shared-scene'), true);
+
+const explicitStoryTimeGraph = integrateMemoryExtraction({
+  ...graphInput,
+  sourceMessages: [message('story-time', 'user', 'offline', Date.now(), { content: '我们约定明天在公园见。', timelineSequence: 12, sceneId: 'conversation:story' })],
+  timelineSequenceStart: 12,
+  timelineSequenceEnd: 12,
+  extraction: { ...emptyExtraction('明确约定了未来见面。'), storyTime: '明天', storyTimeConfidence: 0.9 }
+});
+assert.equal(explicitStoryTimeGraph.episode.temporalBasis, 'story-time');
+assert.equal(explicitStoryTimeGraph.episode.storyTime, '明天');
+assert.equal(explicitStoryTimeGraph.assertions[0]?.storyTime, '明天');
+
+const stateSnapshots = [
+  { id: 'state-old', brainId: graphInput.brainId, kind: 'relationship' as const, summary: '旧', facets: [], sourceAssertionIds: [], sourceEpisodeIds: [], timelineSequence: 3, sceneId: 'conversation:story', createdAt: 30 },
+  { id: 'state-future', brainId: graphInput.brainId, kind: 'relationship' as const, summary: '未来', facets: [], sourceAssertionIds: [], sourceEpisodeIds: [], timelineSequence: 9, sceneId: 'conversation:story', createdAt: 40 },
+];
+assert.equal(latestMemoryStates(stateSnapshots, 5)[0]?.summary, '旧');
 
 const forgottenEpisode = { ...firstGraph.episode, status: 'forgotten' as const };
 const recalledWithForgottenEpisode = recallCharacterMemory({
@@ -362,7 +400,7 @@ const balancedRecall = recallCharacterMemory({
 });
 assert.match(balancedRecall.contextText, /【长期记忆家族】/);
 assert.match(balancedRecall.contextText, /【与当前话题有关的认知】/);
-assert.match(balancedRecall.contextText, /【相关日记片段】/);
+assert.match(balancedRecall.contextText, /【过去的相关日记片段】/);
 assert.ok(balancedRecall.estimatedTokens <= 1_000);
 
 const tightThemeRecall = recallCharacterMemory({

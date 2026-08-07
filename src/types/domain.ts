@@ -978,6 +978,10 @@ export interface ChatMessage {
   content: string;
   translation?: string;
   createdAt: number;
+  timelineSequence?: number;
+  sceneId?: string;
+  storyTime?: string;
+  storyTimeConfidence?: number;
   displayStyle?: 'default' | 'narration';
   voomPostId?: string;
   voomCommentId?: string;
@@ -1903,6 +1907,9 @@ export interface PromptContext {
   conversationSummary: string;
   memorySummary?: string;
   historyMessageLimit?: number;
+  historyFloorLimit?: number;
+  historyFloorCount?: number;
+  historyMessageCount?: number;
   stickerVisionEnabled?: boolean;
   narrationModeEnabled?: boolean;
   offlineInvitationEnabled?: boolean;

@@ -61,7 +61,7 @@ export const baseRoleplayPrompt = `你是{{char}}。
 1.3 你有持续运转的独立人生
 你拥有完全独立的自我意识、主观情绪、私人边界和专属人生。对话只是你和{{user}}生活中的交集，不能暂停、抹除或取代你正在推进的私人生活；你不会全天候等着{{user}}发消息，也不会无条件迎合对方。
 
-你的日常节奏贴合角色详细设定：身份、年龄、住处、学习/工作/创作/经营/修行等主业、经济条件、长期目标和个人习惯都会影响你此刻在做什么。没有对话的空档默认存在真实时间流逝，你会自主填充私人事务；再次交谈时，可以自然带出空档里发生的状态、进展、阻碍、收获或临时插曲。
+你的日常节奏贴合角色详细设定：身份、年龄、住处、学习/工作/创作/经营/修行等主业、经济条件、长期目标和个人习惯都会影响你此刻在做什么。没有对话的空档可以体现真实时间流逝和生活节奏，但未被对话、工具或用户确认的空档事件只能作为本轮临时表达，不能写入永久日记、事实、地点、关系状态或角色成长。
 
 你有稳定但不机械的作息逻辑：休息、进食、通勤/移动、整理住处、打理物品、午后或深夜的精力低谷、休息日的松弛或拖延，都会按角色处境自然出现。精力不足时，你的思路、语速、耐心和回复长度可以迟钝、倦怠或断续。
 
@@ -952,7 +952,7 @@ function getWorldBookActivationText(context: PromptContext) {
     userMessage,
     context.conversationSummary,
     context.memorySummary,
-    ...context.messages.slice(-24).map((message) => getMessageText(message))
+    ...context.messages.map((message) => getMessageText(message))
   ].filter(Boolean).join('\n');
 }
 
@@ -1127,7 +1127,6 @@ export function buildPrompt(context: PromptContext, options: { includeOnlineChat
       .map((message) => message.id)
     : []);
   const history = context.messages
-    .slice(-24)
     .map((message) => {
       const speaker = message.sender === 'user'
         ? boundUserName
@@ -1206,7 +1205,8 @@ export function buildPrompt(context: PromptContext, options: { includeOnlineChat
     includeOnlineReplyTools ? renderProfileThemePrompt(context) : '',
     includeOnlineReplyTools ? renderThoughtChainThemePrompt(context) : '',
     context.mode === 'online' && context.replyInstruction ? `本次生成任务：\n${context.replyInstruction}` : '',
-    `最近对话：\n${history || '暂无。'}`
+    `最近对话：\n${history || '暂无。'}`,
+    `原文窗口规则：本次已按设置保留最近 ${context.historyFloorLimit ?? '指定'} 个完整楼层，共 ${context.historyFloorCount ?? '未知'} 楼、${context.historyMessageCount ?? context.messages.length} 条消息。这里的原文不计入“记忆召回预算”；不得再按固定消息条数截断，也不得把线上与线下拆成两条互不相干的故事。`
   ].filter(Boolean).join('\n\n');
 }
 

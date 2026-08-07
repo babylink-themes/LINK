@@ -28,7 +28,7 @@
 8. 当前对话总结：`context.conversationSummary`。
 9. 记忆手册：`context.memorySummary`。
 10. 世界书：由 `selectWorldBooks(context)` 选择后经 `renderWorldBooks` 注入。
-11. 最近对话：最近 24 条消息，包含消息 id、发送者、时间、引用、Sticker、图片、语音、定位、转账、线下邀约状态等。
+11. 最近对话：由会话记忆设置“保留最近原文”选择的最近完整楼层，包含消息 id、发送者、线上/线下模式、时间、引用、Sticker、图片、语音、定位、转账、线下邀约状态等；该原文窗口不占“记忆召回预算”，不会再固定截成 24 条消息。
 12. 线上聊天可用 Sticker：仅线上聊天回复保留 `renderAvailableStickers(context)`；角色 VOOM、VOOM 评论区回复和小剧场会显式关闭该段。
 13. 本次生成任务：线上且 `context.replyInstruction` 存在时注入。
 

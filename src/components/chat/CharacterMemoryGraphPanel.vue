@@ -28,7 +28,7 @@
       <div class="compression-copy">
         <span class="eyebrow">MEMORY COMPRESSION</span>
         <strong>{{ compressionHeadline }}</strong>
-        <p v-if="stats.compressionActive">更早的已归档楼层由角色记忆代替；最近原文仍按下方设置发送给模型。</p>
+        <p v-if="stats.compressionActive">更早的已归档楼层由角色记忆代替；最近原文严格按下方楼层设置发送，不受记忆召回预算限制。</p>
         <p v-else>打开压缩后，已形成日记的旧楼层会退出回复上下文；消息本身不会被删除。</p>
       </div>
       <div class="compression-numbers">
@@ -58,7 +58,7 @@
         <label class="setting-line"><span><strong>压缩旧楼层</strong><small>超出最近原文范围的已归档内容不再重复发送给模型。</small></span><input v-model="memoryDraft.compressionEnabled" type="checkbox" @change="saveMemorySettings" /></label>
         <label class="setting-line"><span><strong>自动写日记</strong><small>每积累几个完整楼层，就编码一次角色主观记忆。</small></span><input v-model="memoryDraft.autoCapture" type="checkbox" @change="saveMemorySettings" /></label>
         <label class="number-line"><span><strong>每批楼层</strong><small>范围 2–120，默认 12；这是自动目标，模式切换、手动或尾批可更少。</small></span><input v-model.number="memoryDraft.captureEvery" type="number" :min="chatMemorySettingLimits.captureEvery.minimum" :max="chatMemorySettingLimits.captureEvery.maximum" :step="chatMemorySettingLimits.captureEvery.step" @change="saveMemorySettings" /></label>
-        <label class="number-line"><span><strong>保留最近原文</strong><small>按楼层计算，默认 100；即使已写入日记也会保留最近的完整楼层。</small></span><input v-model.number="memoryDraft.recentFloorLimit" type="number" :min="chatMemorySettingLimits.recentFloorLimit.minimum" :max="chatMemorySettingLimits.recentFloorLimit.maximum" :step="chatMemorySettingLimits.recentFloorLimit.step" @change="saveMemorySettings" /></label>
+        <label class="number-line"><span><strong>保留最近原文</strong><small>按完整楼层计算，默认 100；原文窗口不占记忆召回预算，线上和线下仍是同一条剧情。</small></span><input v-model.number="memoryDraft.recentFloorLimit" type="number" :min="chatMemorySettingLimits.recentFloorLimit.minimum" :max="chatMemorySettingLimits.recentFloorLimit.maximum" :step="chatMemorySettingLimits.recentFloorLimit.step" @change="saveMemorySettings" /></label>
         <label class="number-line"><span><strong>记忆召回预算</strong><small>范围 300–50000 tokens，默认 20000；条数不限，各类记忆按预算动态分配。</small></span><input v-model.number="memoryDraft.recallTokenBudget" type="number" :min="chatMemorySettingLimits.recallTokenBudget.minimum" :max="chatMemorySettingLimits.recallTokenBudget.maximum" :step="chatMemorySettingLimits.recallTokenBudget.step" @change="saveMemorySettings" /></label>
         <label class="setting-line"><span><strong>允许缓慢成长</strong><small>关系与印象只依据重复证据逐步变化。</small></span><input v-model="memoryDraft.growthEnabled" type="checkbox" @change="saveMemorySettings" /></label>
         <label class="setting-line"><span><strong>允许长期自然淡化</strong><small>只对至少 30 天未召回、且非珍藏的认知降低可达性，不会因一次没命中就衰减。</small></span><input v-model="memoryDraft.naturalForgettingEnabled" type="checkbox" @change="saveMemorySettings" /></label>
@@ -82,10 +82,10 @@
           <section v-for="group in diaryGroups" :key="group.label" class="month-group">
           <h3>{{ group.label }}</h3>
           <article v-for="episode in group.entries" :key="episode.id" class="diary-entry">
-            <div class="date-rail"><span>{{ dayOf(episode.occurredAt) }}</span><i></i></div>
+            <div class="date-rail"><span>{{ episodeDayLabel(episode) }}</span><i></i></div>
             <div class="diary-card">
               <header class="diary-card-head">
-                <div class="diary-card-meta"><em>{{ channelLabel(episode.channel) }}</em><span>{{ formatDate(episode.occurredAt) }}</span></div>
+                <div class="diary-card-meta"><em>{{ channelLabel(episode.channel) }}</em><span>{{ episodeTimeLabel(episode) }}</span></div>
                 <div class="diary-card-actions">
                   <button type="button" :disabled="busy || !episode.sourceMessageIds.length" :aria-label="`重新生成${memoryText(episode.title)}`" title="重新生成" @click="regenerateEpisode(episode)"><LoaderCircle v-if="regeneratingEpisodeId === episode.id" :size="15" class="spin" /><RefreshCw v-else :size="15" /></button>
                   <button type="button" :disabled="busy" :aria-label="`编辑${memoryText(episode.title)}`" title="编辑" @click="startEpisodeEdit(episode)"><Pencil :size="15" /></button>
@@ -189,7 +189,10 @@ const effectiveEmbeddingModel = computed(() => currentSettings.value.modelOverri
 const stats = computed(() => store.memoryCompressionStatsForConversation(props.conversationId));
 const captureStatus = computed(() => store.memoryCaptureStatusForConversation(props.conversationId));
 const busy = computed(() => capturing.value || rebuilding.value || Boolean(regeneratingEpisodeId.value) || Boolean(deletingEpisodeId.value));
-const timeline = computed(() => [...graph.value.episodes].filter((episode) => episode.status === 'active').sort((left, right) => (right.occurredAt || 0) - (left.occurredAt || 0)));
+const timeline = computed(() => [...graph.value.episodes].filter((episode) => episode.status === 'active').sort((left, right) =>
+  (right.timelineSequenceEnd ?? right.endFloor) - (left.timelineSequenceEnd ?? left.endFloor)
+  || (right.occurredAt || 0) - (left.occurredAt || 0)
+));
 const activeAssertions = computed(() => graph.value.assertions.filter((assertion) => ['current', 'open', 'disputed'].includes(assertion.status)).sort((left, right) => Number(right.pinned) - Number(left.pinned) || right.updatedAt - left.updatedAt));
 const userEntityId = computed(() => graph.value.entities.find((entity) => entity.type === 'user')?.id ?? `${graph.value.brainId}:user`);
 const normalizedQuery = computed(() => normalizeSearch(searchQuery.value));
@@ -204,8 +207,7 @@ const compressionHeadline = computed(() => stats.value.archivedFloors ? `我已�
 const diaryGroups = computed<DiaryGroup[]>(() => {
   const groups = new Map<string, MemoryEpisode[]>();
   for (const episode of visibleTimeline.value) {
-    const date = new Date(episode.occurredAt || episode.createdAt || Date.now());
-    const label = `${date.getFullYear()}年${date.getMonth() + 1}月`;
+    const label = episode.storyTime ? `剧情时间：${episode.storyTime}` : '按剧情顺序';
     groups.set(label, [...(groups.get(label) ?? []), episode]);
   }
   return [...groups.entries()].map(([label, entries]) => ({ label, entries }));
@@ -354,13 +356,24 @@ async function forgetAssertion(assertion: MemoryAssertion) { await store.forgetM
 function setMessage(message: string, tone: 'success' | 'warning') { actionMessage.value = message; actionTone.value = tone; window.setTimeout(() => { if (actionMessage.value === message) actionMessage.value = ''; }, 4500); }
 function normalizeSearch(value: string) { return String(value ?? '').normalize('NFKC').toLocaleLowerCase().replace(/[\s\p{P}\p{S}]+/gu, ''); }
 function memoryText(value: string) { return String(value ?? ''); }
+function formatDate(timestamp: number) {
+  const value = Number(timestamp);
+  if (!Number.isFinite(value) || value <= 0) return '时间未知';
+  return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'numeric', day: 'numeric' }).format(new Date(value));
+}
 function episodeFloorLabel(episode: MemoryEpisode) { return episode.startFloor === episode.endFloor ? `第 ${episode.startFloor} 楼` : `第 ${episode.startFloor}–${episode.endFloor} 楼`; }
 function themeNames(themeIds: string[]) { const map = new Map(graph.value.themes.map((theme) => [theme.id, theme.name])); return themeIds.map((id) => map.get(id)).filter((name): name is string => Boolean(name)); }
 function activeThemeAssertionCount(theme: MemoryTheme) { return activeAssertions.value.filter((assertion) => theme.assertionIds.includes(assertion.id)).length; }
 function subjectName(entityId: string) { return memoryText(graph.value.entities.find((entity) => entity.id === entityId)?.name || '这件事'); }
-function dayOf(timestamp: number) { return String(new Date(timestamp || Date.now()).getDate()).padStart(2, '0'); }
-function formatDate(timestamp: number) { return Number.isFinite(timestamp) && timestamp > 0 ? new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(timestamp) : '时间未标记'; }
-function channelLabel(channel: MemoryChannel) { return ({ online: '线上', offline: '线下', group: '群聊', voom: '动态', 'couple-space': '共同空间', call: '通话', system: '纠正' } satisfies Record<MemoryChannel, string>)[channel]; }
+function episodeTimeLabel(episode: MemoryEpisode) {
+  if (episode.storyTime) return `剧情时间：${memoryText(episode.storyTime)}`;
+  return `剧情顺序：${episode.timelineSequenceStart ?? episode.startFloor}–${episode.timelineSequenceEnd ?? episode.endFloor}`;
+}
+function episodeDayLabel(episode: MemoryEpisode) {
+  if (episode.storyTime) return memoryText(episode.storyTime).slice(-2).padStart(2, '0');
+  return String(episode.timelineSequenceEnd ?? episode.endFloor ?? '序');
+}
+function channelLabel(channel: MemoryChannel) { return ({ chat: '线上/线下会话', online: '线上/线下会话', offline: '线上/线下会话', group: '群聊', voom: '动态', 'couple-space': '共同空间', call: '通话', system: '纠正' } satisfies Record<MemoryChannel, string>)[channel]; }
 function stateLabel(kind: MemoryStateKind) { return ({ relationship: '我们的关系', 'user-impression': `我对 ${userName.value} 的印象`, 'adaptive-personality': '我的变化', mood: '我的情绪', 'current-context': '当时的情境' } satisfies Record<MemoryStateKind, string>)[kind]; }
 function trendLabel(trend: MemoryStateSnapshot['facets'][number]['trend']) { return trend === 'up' ? '变深' : trend === 'down' ? '变淡' : '稳定'; }
 function certaintyLabel(value: number) { return `确信 ${Math.round(Math.min(1, Math.max(0, Number(value) || 0)) * 100)}%`; }

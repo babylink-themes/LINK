@@ -13,9 +13,9 @@ export function getConversationActiveMessages(messages: ChatMessage[]) {
 }
 
 function getMessageFloorGroupKey(message: ChatMessage) {
-  if (message.sender === 'user') return `${message.mode}:user`;
-  if (message.replyBatchId) return `${message.mode}:reply:${message.replyBatchId}`;
-  return `${message.mode}:assistant`;
+  if (message.sender === 'user') return 'user';
+  if (message.replyBatchId) return `reply:${message.replyBatchId}`;
+  return 'assistant';
 }
 
 export function getConversationFloors(messages: ChatMessage[]) {
