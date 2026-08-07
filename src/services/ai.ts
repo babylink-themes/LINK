@@ -468,6 +468,10 @@ function supportsB64JsonResponseFormat(model: string) {
   return /^dall-e-(?:2|3)$/i.test(model.trim());
 }
 
+function supportsOpenAiInputFidelity(model: string) {
+  return /^gpt-image(?:-|$)/i.test(model.trim());
+}
+
 function buildOpenAiImageRequestBody(endpoint: string, model: string, prompt: string, size: string, preferBase64ImageResponse = false, referenceImage?: PreparedReferenceImage | null) {
   if (isOpenAiResponsesEndpoint(endpoint)) {
     return {
@@ -484,7 +488,8 @@ function buildOpenAiImageRequestBody(endpoint: string, model: string, prompt: st
       tools: [{
         type: 'image_generation',
         action: 'generate',
-        ...(size ? { size } : {})
+        ...(size ? { size } : {}),
+        ...(referenceImage && supportsOpenAiInputFidelity(model) ? { input_fidelity: 'high' } : {})
       }],
       tool_choice: 'required'
     };
@@ -506,6 +511,7 @@ function buildOpenAiImageEditFormData(model: string, prompt: string, size: strin
   formData.set('prompt', prompt);
   if (size) formData.set('size', size);
   formData.set('n', '1');
+  if (supportsOpenAiInputFidelity(model)) formData.set('input_fidelity', 'high');
   formData.set('image', new Blob([bytes], { type: referenceImage.mimeType }), referenceImage.filename);
   return formData;
 }
