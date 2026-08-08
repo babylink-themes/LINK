@@ -1,5 +1,5 @@
 import { unzipSync } from 'fflate';
-import type { ApiVendor, AppSettings, CharacterProfile, ChatApiReasoningFormat, ChatApiTrace, ChatMcpOperation, ChatMcpOperationState, ChatMcpResultAttachment, ChatMcpToolCallTrace, ChatMessage, ConversationTimeAwarenessSettings, CoupleSpaceSnapshot, GenerateReplyInput, GroupDiscoveryCandidate, GroupMember, ImageProviderType, MusicComment, MusicTrack, NovelAiModelOption, PollinationsModelOption, PromptContext, SmallTheater, SmallTheaterTopic, UserProfile, VoomComment, VoomFrequency, VoomPost, WorldBookEntry } from '@/types/domain';
+import type { ApiVendor, AppSettings, CharacterProfile, ChatApiCallTrace, ChatApiReasoningFormat, ChatApiTrace, ChatMcpOperation, ChatMcpOperationState, ChatMcpResultAttachment, ChatMcpToolCallTrace, ChatMessage, ChatPromptLayerTrace, ConversationTimeAwarenessSettings, CoupleSpaceSnapshot, GenerateReplyInput, GroupDiscoveryCandidate, GroupMember, ImageProviderType, MusicComment, MusicTrack, NovelAiModelOption, PollinationsModelOption, PromptContext, SmallTheater, SmallTheaterTopic, UserProfile, VoomComment, VoomFrequency, VoomPost, WorldBookEntry } from '@/types/domain';
 import { createId } from '@/utils/id';
 import { getCharacterAiName } from '@/utils/character';
 import { getUserAiName, getUserDisplayName, getUserVoomAuthorName } from '@/utils/profile';
@@ -15,10 +15,11 @@ import { getVoomFrequencyChance, stripVoomCommentReplyPrefix } from '@/utils/voo
 import { normalizeCoupleSpaceSnapshot } from '@/utils/coupleSpace';
 import { extractThoughtChainContent } from '@/utils/thoughtChainThemes';
 import { isLocalMediaCacheUrl, resolveLocalMediaBlob } from '@/utils/mediaStorage';
+import { compactJsonSchema, createCompactMcpPlannerCatalog, createCompactReferenceCatalog, createCompactStickerPromptCatalog } from '@/utils/promptCatalog';
 import { classifyTextApiHttpError, TextApiRequestError, type TextApiErrorClassification } from '@/utils/textApiErrors';
 import { executeMcpTools, resolveMcpTools, type ResolvedMcpTool } from './mcp';
-import { buildMomentPrompt, buildPrompt } from './prompt';
-import { prependTabooWorldBookPrompt } from './tabooWorldBook';
+import { buildMomentPrompt, buildPrompt, buildPromptWithTrace } from './prompt';
+import { getTabooWorldBookPrompt } from './tabooWorldBook';
 
 const modelSelectionSeparator = '::';
 const textProxyPath = '/__text-proxy';
@@ -1368,8 +1369,8 @@ function normalizeSegmentType(value: unknown): RoleplayReplySegment['type'] | ''
   return '';
 }
 
-function normalizeRoleplaySegment(value: unknown, narrationEnabled: boolean): RoleplayReplySegment[] {
-  if (Array.isArray(value)) return value.flatMap((item) => normalizeRoleplaySegment(item, narrationEnabled));
+function normalizeRoleplaySegment(value: unknown, narrationEnabled: boolean, resolveStickerCode: (selection: string) => string): RoleplayReplySegment[] {
+  if (Array.isArray(value)) return value.flatMap((item) => normalizeRoleplaySegment(item, narrationEnabled, resolveStickerCode));
   if (!value || typeof value !== 'object') return [];
 
   const record = value as Record<string, unknown>;
@@ -1381,7 +1382,7 @@ function normalizeRoleplaySegment(value: unknown, narrationEnabled: boolean): Ro
       ...normalizeStickerSelections(record.sticker),
       ...normalizeStickerSelections(record.stickerId),
       ...normalizeStickerSelections(record.id)
-    ].map((item) => item.trim()).filter(Boolean))];
+    ].map((item) => resolveStickerCode(item).trim()).filter(Boolean))];
     return stickers.length ? [{ type: 'sticker', stickers }] : [];
   }
 
@@ -1436,11 +1437,11 @@ function normalizeRoleplaySegment(value: unknown, narrationEnabled: boolean): Ro
   return [];
 }
 
-function normalizeRoleplaySegments(value: unknown, narrationEnabled: boolean): RoleplayReplySegment[] {
-  if (Array.isArray(value)) return value.flatMap((item) => normalizeRoleplaySegment(item, narrationEnabled));
+function normalizeRoleplaySegments(value: unknown, narrationEnabled: boolean, resolveStickerCode: (selection: string) => string): RoleplayReplySegment[] {
+  if (Array.isArray(value)) return value.flatMap((item) => normalizeRoleplaySegment(item, narrationEnabled, resolveStickerCode));
   if (value && typeof value === 'object') {
     const record = value as Record<string, unknown>;
-    return normalizeRoleplaySegments(record.messages ?? record.items ?? record.sequence ?? record.timeline ?? record.segments, narrationEnabled);
+    return normalizeRoleplaySegments(record.messages ?? record.items ?? record.sequence ?? record.timeline ?? record.segments, narrationEnabled, resolveStickerCode);
   }
   return [];
 }
@@ -1797,6 +1798,16 @@ function normalizeRoleplayMessageActions(record: Record<string, unknown>): Rolep
     gobangResponse: normalizeGobangResponseAction(record, actionRecord),
     relationshipAction: normalizeRelationshipAction(record, actionRecord)
   };
+}
+
+function resolveRoleplayMessageActionReferences(actions: RoleplayMessageActions, resolveReference: (reference: string) => string) {
+  return {
+    ...actions,
+    recallMessageIds: actions.recallMessageIds.map(resolveReference),
+    quotes: actions.quotes.map((quote) => ({ ...quote, messageId: resolveReference(quote.messageId) })),
+    transferDecisions: actions.transferDecisions?.map((decision) => ({ ...decision, messageId: resolveReference(decision.messageId) })),
+    musicListenInviteDecisions: actions.musicListenInviteDecisions?.map((decision) => ({ ...decision, messageId: resolveReference(decision.messageId) }))
+  } satisfies RoleplayMessageActions;
 }
 
 function normalizeRelationshipAction(record: Record<string, unknown>, actionRecord: Record<string, unknown>): RoleplayRelationshipAction | null {
@@ -2253,6 +2264,10 @@ export interface TextGenerationOptions {
   retryTransientFailures?: boolean;
   onStreamText?: (text: string) => void;
   onStreamStart?: () => void;
+  trace?: {
+    label: string;
+    layers: ChatPromptLayerTrace[];
+  };
 }
 
 export interface TextGenerationUsage {
@@ -2272,6 +2287,7 @@ export interface TextGenerationResult {
   model?: string;
   reasoning?: string;
   reasoningFormat?: ChatApiReasoningFormat;
+  requestTrace?: ChatApiCallTrace;
 }
 
 export async function requestTextGeneration(settings: AppSettings | undefined, prompt: string, modelOverride = '', options: TextGenerationOptions = {}) {
@@ -2371,22 +2387,22 @@ interface ReasoningFragment {
   format: ChatApiReasoningFormat;
 }
 
-function normalizeReasoningText(value: unknown, depth = 0): string[] {
+function normalizeReasoningText(value: unknown, depth = 0, preserveWhitespace = false): string[] {
   if (depth > 6) return [];
-  if (Array.isArray(value)) return value.flatMap((item) => normalizeReasoningText(item, depth + 1));
+  if (Array.isArray(value)) return value.flatMap((item) => normalizeReasoningText(item, depth + 1, preserveWhitespace));
   if (typeof value === 'string' || typeof value === 'number') {
-    const text = String(value).trim();
-    return text ? [text] : [];
+    const text = String(value);
+    return (preserveWhitespace ? text : text.trim()) ? [text] : [];
   }
   if (!value || typeof value !== 'object') return [];
   const record = value as Record<string, unknown>;
-  return [record.thinking, record.reasoning_content, record.reasoningContent, record.reasoning, record.analysis, record.summary, record.text, record.content, record.parts, record.data]
-    .flatMap((candidate) => normalizeReasoningText(candidate, depth + 1));
+  return [record.thinking, record.thinking_delta, record.reasoning_content, record.reasoningContent, record.reasoning, record.analysis, record.analysis_content, record.analysisContent, record.summary, record.text, record.content, record.parts, record.data]
+    .flatMap((candidate) => normalizeReasoningText(candidate, depth + 1, preserveWhitespace));
 }
 
-function collectReasoningBlocks(value: unknown, depth = 0): ReasoningFragment[] {
+function collectReasoningBlocks(value: unknown, depth = 0, preserveWhitespace = false): ReasoningFragment[] {
   if (depth > 7) return [];
-  if (Array.isArray(value)) return value.flatMap((item) => collectReasoningBlocks(item, depth + 1));
+  if (Array.isArray(value)) return value.flatMap((item) => collectReasoningBlocks(item, depth + 1, preserveWhitespace));
   if (!value || typeof value !== 'object') return [];
   const record = value as Record<string, unknown>;
   const blockType = String(record.type ?? '').trim().toLocaleLowerCase();
@@ -2395,15 +2411,26 @@ function collectReasoningBlocks(value: unknown, depth = 0): ReasoningFragment[] 
   const isCompatibleReasoning = /(?:^|[._-])(?:reasoning|analysis)(?:$|[._-])/.test(blockType);
   if (isGeminiThought || isClaudeThinking || isCompatibleReasoning) {
     const format: ChatApiReasoningFormat = isGeminiThought ? 'gemini' : isClaudeThinking ? 'claude' : 'openai-compatible';
-    const text = normalizeReasoningText([record.thinking, record.reasoning, record.analysis, record.summary, record.text, record.content]).join('\n').trim();
+    const rawText = normalizeReasoningText([record.thinking, record.thinking_delta, record.reasoning, record.analysis, record.analysis_content, record.analysisContent, record.summary, record.text, record.content], 0, preserveWhitespace)
+      .join(preserveWhitespace ? '' : '\n');
+    const text = preserveWhitespace ? rawText : rawText.trim();
     return text ? [{ text, format }] : [];
   }
-  return [record.content, record.parts, record.message, record.delta, record.output, record.candidates, record.reasoning_details, record.reasoningDetails]
-    .flatMap((candidate) => collectReasoningBlocks(candidate, depth + 1));
+  return [record.content, record.parts, record.message, record.delta, record.content_block, record.contentBlock, record.output, record.candidates, record.choices, record.reasoning_details, record.reasoningDetails]
+    .flatMap((candidate) => collectReasoningBlocks(candidate, depth + 1, preserveWhitespace));
 }
 
-function extractTextApiReasoning(payload: Record<string, unknown>, choiceMessage: Record<string, unknown>, firstChoice: Record<string, unknown>, firstCandidate: Record<string, unknown>, model: string) {
-  const fragments: ReasoningFragment[] = collectReasoningBlocks(payload);
+function extractTextApiReasoning(payload: Record<string, unknown>, choiceMessage: Record<string, unknown>, firstChoice: Record<string, unknown>, firstCandidate: Record<string, unknown>, model: string, preserveWhitespace = false) {
+  const fragments: ReasoningFragment[] = collectReasoningBlocks(payload, 0, preserveWhitespace);
+  const choiceDelta = firstChoice.delta && typeof firstChoice.delta === 'object' && !Array.isArray(firstChoice.delta)
+    ? firstChoice.delta as Record<string, unknown>
+    : {};
+  const responseDelta = payload.delta && typeof payload.delta === 'object' && !Array.isArray(payload.delta)
+    ? payload.delta as Record<string, unknown>
+    : {};
+  const contentBlock = payload.content_block && typeof payload.content_block === 'object' && !Array.isArray(payload.content_block)
+    ? payload.content_block as Record<string, unknown>
+    : {};
   const directSources: Array<{ value: unknown; format: ChatApiReasoningFormat }> = [
     { value: choiceMessage.reasoning_content, format: 'openai-compatible' },
     { value: choiceMessage.reasoningContent, format: 'openai-compatible' },
@@ -2411,14 +2438,46 @@ function extractTextApiReasoning(payload: Record<string, unknown>, choiceMessage
     { value: choiceMessage.reasoningDetails, format: 'openai-compatible' },
     { value: choiceMessage.reasoning, format: 'openai-compatible' },
     { value: choiceMessage.thinking, format: 'claude' },
+    { value: choiceMessage.analysis, format: 'openai-compatible' },
+    { value: choiceMessage.analysis_content, format: 'openai-compatible' },
+    { value: choiceMessage.analysisContent, format: 'openai-compatible' },
     { value: firstChoice.reasoning_content, format: 'openai-compatible' },
     { value: firstChoice.reasoning, format: 'openai-compatible' },
+    { value: firstChoice.analysis, format: 'openai-compatible' },
+    { value: choiceDelta.reasoning_content, format: 'openai-compatible' },
+    { value: choiceDelta.reasoningContent, format: 'openai-compatible' },
+    { value: choiceDelta.reasoning_details, format: 'openai-compatible' },
+    { value: choiceDelta.reasoningDetails, format: 'openai-compatible' },
+    { value: choiceDelta.reasoning, format: 'openai-compatible' },
+    { value: choiceDelta.analysis, format: 'openai-compatible' },
+    { value: choiceDelta.analysis_content, format: 'openai-compatible' },
+    { value: choiceDelta.analysisContent, format: 'openai-compatible' },
+    { value: choiceDelta.thinking, format: 'claude' },
+    { value: responseDelta.reasoning_content, format: 'openai-compatible' },
+    { value: responseDelta.reasoningContent, format: 'openai-compatible' },
+    { value: responseDelta.reasoning_details, format: 'openai-compatible' },
+    { value: responseDelta.reasoningDetails, format: 'openai-compatible' },
+    { value: responseDelta.reasoning, format: 'openai-compatible' },
+    { value: responseDelta.analysis, format: 'openai-compatible' },
+    { value: responseDelta.analysis_content, format: 'openai-compatible' },
+    { value: responseDelta.analysisContent, format: 'openai-compatible' },
+    { value: responseDelta.thinking, format: 'claude' },
+    { value: contentBlock.thinking, format: 'claude' },
+    { value: contentBlock.reasoning, format: 'openai-compatible' },
+    { value: contentBlock.analysis, format: 'openai-compatible' },
     { value: firstCandidate.thinking, format: 'gemini' },
     { value: payload.reasoning, format: 'openai-compatible' },
-    { value: payload.thinking, format: 'claude' }
+    { value: payload.analysis, format: 'openai-compatible' },
+    { value: payload.analysis_content, format: 'openai-compatible' },
+    { value: payload.analysisContent, format: 'openai-compatible' },
+    { value: payload.thinking, format: 'claude' },
+    { value: payload.thinking_delta, format: 'claude' },
+    { value: payload.reasoning_content, format: 'openai-compatible' }
   ];
   for (const source of directSources) {
-    const text = normalizeReasoningText(source.value).join('\n').trim();
+    const rawText = normalizeReasoningText(source.value, 0, preserveWhitespace)
+      .join(preserveWhitespace ? '' : '\n');
+    const text = preserveWhitespace ? rawText : rawText.trim();
     if (text) fragments.push({ text, format: source.format });
   }
   const seen = new Set<string>();
@@ -2432,9 +2491,29 @@ function extractTextApiReasoning(payload: Record<string, unknown>, choiceMessage
   if (/gemini/i.test(model)) reasoningFormat = 'gemini';
   else if (/claude|anthropic/i.test(model)) reasoningFormat = 'claude';
   return {
-    reasoning: uniqueFragments.map((fragment) => fragment.text).join('\n\n').slice(0, 60_000),
+    reasoning: uniqueFragments.map((fragment) => fragment.text).join(preserveWhitespace ? '' : '\n\n').slice(0, 60_000),
     reasoningFormat
   };
+}
+
+function extractTextApiStreamReasoningDelta(payload: unknown, model = '') {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return { text: '', format: 'unknown' as ChatApiReasoningFormat };
+  }
+  const record = payload as Record<string, unknown>;
+  const choices = Array.isArray(record.choices) ? record.choices : [];
+  const firstChoice = choices[0] && typeof choices[0] === 'object' && !Array.isArray(choices[0])
+    ? choices[0] as Record<string, unknown>
+    : {};
+  const choiceMessage = firstChoice.message && typeof firstChoice.message === 'object' && !Array.isArray(firstChoice.message)
+    ? firstChoice.message as Record<string, unknown>
+    : {};
+  const candidates = Array.isArray(record.candidates) ? record.candidates : [];
+  const firstCandidate = candidates[0] && typeof candidates[0] === 'object' && !Array.isArray(candidates[0])
+    ? candidates[0] as Record<string, unknown>
+    : {};
+  const extracted = extractTextApiReasoning(record, choiceMessage, firstChoice, firstCandidate, model, true);
+  return { text: extracted.reasoning, format: extracted.reasoningFormat };
 }
 
 function extractTextApiResult(payload: unknown): TextGenerationResult {
@@ -2472,6 +2551,7 @@ function extractTextApiResult(payload: unknown): TextGenerationResult {
     record.outputText,
     record.content,
     firstCandidate.content,
+    firstCandidate.parts,
     record.response,
     record.output
   ];
@@ -2539,6 +2619,11 @@ function extractTextApiStreamDelta(payload: unknown) {
     firstChoice.text,
     responseDelta.content,
     responseDelta.text,
+    record.content_block,
+    record.contentBlock,
+    record.content,
+    record.parts,
+    record.candidates,
     record.delta,
     record.text
   ];
@@ -2549,8 +2634,26 @@ function extractTextApiStreamDelta(payload: unknown) {
   return '';
 }
 
-function updateStreamResultMetadata(result: TextGenerationResult, payload: unknown) {
+function appendStreamReasoning(current: string | undefined, next: string) {
+  const normalizedNext = next.slice(0, 60_000);
+  if (!normalizedNext) return current ?? '';
+  if (!current) return normalizedNext;
+  if (normalizedNext.startsWith(current)) return normalizedNext.slice(0, 60_000);
+  if (current.endsWith(normalizedNext)) return current;
+  return `${current}${normalizedNext}`.slice(0, 60_000);
+}
+
+function updateStreamResultMetadata(result: TextGenerationResult, payload: unknown, model = '') {
   const partial = extractTextApiResult(payload);
+  const reasoningDelta = extractTextApiStreamReasoningDelta(payload, model);
+  const resolvedModel = partial.model || result.model || model;
+  const reasoningFormat = /gemini/i.test(resolvedModel)
+    ? 'gemini'
+    : /claude|anthropic/i.test(resolvedModel)
+      ? 'claude'
+      : reasoningDelta.format !== 'unknown'
+        ? reasoningDelta.format
+        : partial.reasoningFormat ?? result.reasoningFormat;
   return {
     ...result,
     finishReason: partial.finishReason || result.finishReason,
@@ -2559,9 +2662,9 @@ function updateStreamResultMetadata(result: TextGenerationResult, payload: unkno
     incompleteReason: partial.incompleteReason || result.incompleteReason,
     requestId: partial.requestId || result.requestId,
     usage: partial.usage ?? result.usage,
-    model: partial.model || result.model,
-    reasoning: partial.reasoning || result.reasoning,
-    reasoningFormat: partial.reasoningFormat ?? result.reasoningFormat
+    model: resolvedModel,
+    reasoning: reasoningDelta.text ? appendStreamReasoning(result.reasoning, reasoningDelta.text) : result.reasoning || partial.reasoning,
+    reasoningFormat
   };
 }
 
@@ -2571,7 +2674,7 @@ interface TextApiStreamReadResult {
   hasText: boolean;
 }
 
-async function readTextApiStreamResponse(response: Response, options: TextGenerationOptions): Promise<TextApiStreamReadResult> {
+async function readTextApiStreamResponse(response: Response, options: TextGenerationOptions, model = ''): Promise<TextApiStreamReadResult> {
   const contentType = response.headers.get('content-type')?.toLocaleLowerCase() ?? '';
   if (!contentType.includes('text/event-stream')) {
     const data = await readJsonPayload(response, '文本模型 API 返回异常');
@@ -2612,7 +2715,7 @@ async function readTextApiStreamResponse(response: Response, options: TextGenera
         result = { ...result, text: `${result.text}${delta}` };
         options.onStreamText?.(result.text);
       }
-      result = updateStreamResultMetadata(result, payload);
+      result = updateStreamResultMetadata(result, payload, model);
     } catch {}
   };
 
@@ -2647,10 +2750,60 @@ async function isTextApiStreamingUnsupported(response: Response) {
   }
 }
 
+function createTextApiRequestTrace(
+  options: TextGenerationOptions,
+  prioritizedPrompt: string,
+  tabooPrompt: string,
+  imageParts: TextApiContentPart[],
+  result: TextGenerationResult,
+  fallbackModel: string
+): ChatApiCallTrace | undefined {
+  if (!options.trace) return undefined;
+  const layers = options.trace.layers.map((layer) => ({ ...layer }));
+  if (tabooPrompt) {
+    layers.unshift({
+      id: 'taboo-world-book',
+      title: '禁忌之书（全站优先规则）',
+      characters: tabooPrompt.length + 2,
+      estimatedTokens: estimateTokenCount(tabooPrompt)
+    });
+  }
+  const visualText = imageParts
+    .filter((part) => part.type === 'text')
+    .map((part) => part.text ?? '')
+    .join('\n');
+  const imageUrls = imageParts
+    .filter((part) => part.type === 'image_url')
+    .map((part) => part.image_url?.url ?? '')
+    .filter(Boolean);
+  const imageCount = imageUrls.length;
+  const visualCharacters = visualText.length + imageUrls.reduce((total, url) => total + url.length, 0);
+  if (visualCharacters || imageCount) {
+    layers.push({
+      id: 'visual-input',
+      title: '本轮图片与视觉说明',
+      characters: visualCharacters,
+      estimatedTokens: estimateTokenCount(visualText) + imageCount * 85,
+      ...(imageCount ? { imageCount } : {})
+    });
+  }
+  const promptCharacters = prioritizedPrompt.length + visualCharacters;
+  return {
+    label: options.trace.label,
+    model: result.model?.trim() || fallbackModel,
+    ...(result.requestId ? { requestId: result.requestId } : {}),
+    ...(result.usage ? { usage: result.usage } : {}),
+    promptCharacters,
+    estimatedInputTokens: estimateTokenCount(prioritizedPrompt) + estimateTokenCount(visualText) + imageCount * 85,
+    layers
+  };
+}
+
 async function callTextApiDetailed(settings: AppSettings | undefined, prompt: string, modelOverride = '', imageParts: TextApiContentPart[] = [], options: TextGenerationOptions = {}): Promise<TextGenerationResult> {
   const resolved = getResolvedTextApiConfig(settings, modelOverride);
   if (!resolved.endpoint.trim()) return { text: '', finishReason: '', status: '', incomplete: false, incompleteReason: '', requestId: '' };
-  const prioritizedPrompt = prependTabooWorldBookPrompt(prompt);
+  const tabooPrompt = getTabooWorldBookPrompt();
+  const prioritizedPrompt = tabooPrompt ? `${tabooPrompt}\n\n${prompt}` : prompt;
 
   const content = imageParts.length
     ? [{ type: 'text' as const, text: prioritizedPrompt }, ...imageParts]
@@ -2672,6 +2825,11 @@ async function callTextApiDetailed(settings: AppSettings | undefined, prompt: st
       ...(streaming ? { stream: true } : {})
     })
   });
+  const finalizeResult = (result: TextGenerationResult) => {
+    const normalizedResult = { ...result, model: result.model || resolved.model };
+    const requestTrace = createTextApiRequestTrace(options, prioritizedPrompt, tabooPrompt, imageParts, normalizedResult, resolved.model);
+    return requestTrace ? { ...normalizedResult, requestTrace } : normalizedResult;
+  };
 
   let streaming = resolved.streaming !== 'off';
   let requestInit = createRequestInit(Boolean(options.jsonMode), streaming);
@@ -2718,9 +2876,9 @@ async function callTextApiDetailed(settings: AppSettings | undefined, prompt: st
   }
 
   if (streaming) {
-    const streamResult = await readTextApiStreamResponse(response, options);
+    const streamResult = await readTextApiStreamResponse(response, options, resolved.model);
     if (streamResult.hasText || !streamResult.streamed || resolved.streaming === 'on') {
-      return { ...streamResult.result, model: streamResult.result.model || resolved.model };
+      return finalizeResult(streamResult.result);
     }
 
     const fallbackInit = createRequestInit(Boolean(options.jsonMode), false);
@@ -2730,12 +2888,12 @@ async function callTextApiDetailed(settings: AppSettings | undefined, prompt: st
     }
     const fallbackData = await readJsonPayload(fallbackResponse.response, '文本模型 API 返回异常');
     const fallbackResult = extractTextApiResult(fallbackData);
-    return { ...fallbackResult, model: fallbackResult.model || resolved.model };
+    return finalizeResult(fallbackResult);
   }
 
   const data = await readJsonPayload(response, '文本模型 API 返回异常');
   const result = extractTextApiResult(data);
-  return { ...result, model: result.model || resolved.model };
+  return finalizeResult(result);
 }
 
 async function callTextApi(settings: AppSettings | undefined, prompt: string, modelOverride = '', imageParts: TextApiContentPart[] = [], options: TextGenerationOptions = {}) {
@@ -3085,16 +3243,6 @@ function looksLikeStructuredRoleplayReply(content: string) {
     || /["'](?:messages|messageActions|profileUpdate|plotChoices)["']\s*:/.test(trimmed);
 }
 
-class RoleplayReplyFormatError extends Error {
-  constructor() {
-    super('角色回复模型返回的 JSON 格式损坏。');
-    this.name = 'RoleplayReplyFormatError';
-  }
-}
-
-const roleplayFormatRetryInstruction = `重要重试要求：上一次响应的 JSON 格式损坏。请从头重新生成完整响应，只输出一个 JSON 对象，不要 Markdown 代码块或解释。
-所有 content、translation 与 profileThemeContent 都必须是合法 JSON 字符串：换行写成 \\n，原始反斜杠写成 \\\\，双引号写成 \\"。不要省略结尾的引号、数组或花括号。`;
-
 function readPartialJsonString(value: string, startIndex: number) {
   let text = '';
   for (let index = startIndex; index < value.length; index += 1) {
@@ -3167,6 +3315,13 @@ export function normalizeRoleplayReplyPayload(apiReply: string, input: GenerateR
         ? parsed as Partial<RoleplayReplyResult>
         : {};
       const parsedRecordAny = parsedRecord as Record<string, unknown>;
+      const stickerCatalog = createCompactStickerPromptCatalog((input.availableStickers ?? []).map((sticker) => ({ id: sticker.stickerId, description: sticker.description })));
+      const historyReferences = createCompactReferenceCatalog(input.messages.map((message) => message.id));
+      const resolveStickerCode = (selection: string) => stickerCatalog.resolve(selection) ?? selection;
+      const resolveHistoryReference = (reference: string) => historyReferences.resolve(reference) ?? reference;
+      const normalizePromptStickerSelections = (value: unknown) => [...new Set(normalizeStickerSelections(value)
+        .map((selection) => resolveStickerCode(selection).trim())
+        .filter(Boolean))];
       const hiddenPlotChoices: string[] = [];
       const replies = normalizeReplyMessages(parsed)
         .map((reply) => {
@@ -3192,24 +3347,25 @@ export function normalizeRoleplayReplyPayload(apiReply: string, input: GenerateR
         : [];
       const segments = normalizeRoleplaySegments(
         parsedRecordAny.messages ?? parsedRecordAny.items ?? parsedRecordAny.sequence ?? parsedRecordAny.timeline ?? parsedRecordAny.segments,
-        input.mode === 'online' && Boolean(input.narrationModeEnabled)
+        input.mode === 'online' && Boolean(input.narrationModeEnabled),
+        resolveStickerCode
       );
-      const messageActions = normalizeRoleplayMessageActions(parsedRecordAny);
+      const messageActions = resolveRoleplayMessageActionReferences(normalizeRoleplayMessageActions(parsedRecordAny), resolveHistoryReference);
       const images = normalizeRoleplayImages(parsedRecordAny.images ?? parsedRecordAny.imageMessages ?? parsedRecordAny.pictures);
       const profileUpdateRecord = parsedRecord.profileUpdate && typeof parsedRecord.profileUpdate === 'object'
         ? parsedRecord.profileUpdate as Record<string, unknown>
         : null;
       const stickers = [...new Set([
-        ...normalizeStickerSelections(parsedRecord.stickers),
-        ...normalizeStickerSelections(parsedRecordAny.stickerIds),
-        ...normalizeStickerSelections(parsedRecordAny.sticker)
+        ...normalizePromptStickerSelections(parsedRecord.stickers),
+        ...normalizePromptStickerSelections(parsedRecordAny.stickerIds),
+        ...normalizePromptStickerSelections(parsedRecordAny.sticker)
       ].map((item) => item.trim()).filter(Boolean))];
       const stickerPlacements = [
         ...normalizeStickerPlacements(parsedRecordAny.stickerPlacements),
         ...normalizeStickerPlacements(parsedRecordAny.replyStickers),
         ...normalizeStickerPlacements(parsedRecordAny.stickerMessages),
         ...normalizeReplyStickerPlacements(parsedRecordAny.replies ?? parsedRecordAny.messages)
-      ];
+      ].map((placement) => ({ ...placement, stickers: normalizePromptStickerSelections(placement.stickers) }));
       const thoughtChain = normalizeVisibleThoughtChain(parsedRecordAny.thoughtChain);
       return JSON.stringify({
         reply: replies[0] ?? '',
@@ -3245,7 +3401,7 @@ export function normalizeRoleplayReplyPayload(apiReply: string, input: GenerateR
           : null
       } satisfies RoleplayReplyResult);
     } catch {
-      if (looksLikeStructuredRoleplayReply(apiReply)) throw new RoleplayReplyFormatError();
+      if (looksLikeStructuredRoleplayReply(apiReply)) throw new Error('角色回复模型返回的 JSON 格式损坏。');
       const hiddenPlotChoices: string[] = [];
       const replies = (input.mode === 'online' ? normalizeRawOnlineReply(apiReply) : [apiReply])
         .map((reply) => {
@@ -3300,19 +3456,24 @@ function mcpToolRef(serverId: string, toolName: string) {
   return `${serverId}:${toolName}`;
 }
 
-function mcpPlannerToolCatalog(tools: ResolvedMcpTool[]) {
-  return tools.map(({ server, tool }) => ({
-    toolRef: mcpToolRef(server.id, tool.name),
-    serverId: server.id,
-    serverName: server.name,
-    toolName: tool.name,
-    title: tool.title,
-    description: tool.description,
-    inputSchema: JSON.stringify(tool.inputSchema).slice(0, maxMcpPlannerSchemaLength)
-  }));
+function compactMcpPlannerInputSchema(inputSchema: Record<string, unknown>) {
+  const compactSchema = compactJsonSchema(inputSchema);
+  const serialized = JSON.stringify(compactSchema);
+  return serialized.length > maxMcpPlannerSchemaLength ? serialized.slice(0, maxMcpPlannerSchemaLength) : compactSchema;
 }
 
-function normalizeMcpPlannedCalls(payload: unknown, tools: ResolvedMcpTool[], limit: number): PlannedMcpToolCall[] {
+function createMcpPlannerCatalog(tools: ResolvedMcpTool[]) {
+  return createCompactMcpPlannerCatalog(tools.map((resolvedTool) => ({
+    id: resolvedTool.tool.name,
+    title: resolvedTool.tool.title,
+    description: resolvedTool.tool.description,
+    inputSchema: compactMcpPlannerInputSchema(resolvedTool.tool.inputSchema),
+    write: resolvedTool.tool.write,
+    resolvedTool
+  })));
+}
+
+function normalizeMcpPlannedCalls(payload: unknown, tools: ResolvedMcpTool[], limit: number, catalog: ReturnType<typeof createMcpPlannerCatalog>): PlannedMcpToolCall[] {
   const record = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload as Record<string, unknown> : null;
   const rawCalls = Array.isArray(payload)
     ? payload
@@ -3325,13 +3486,17 @@ function normalizeMcpPlannedCalls(payload: unknown, tools: ResolvedMcpTool[], li
   for (const rawCall of rawCalls) {
     if (calls.length >= limit || !rawCall || typeof rawCall !== 'object' || Array.isArray(rawCall)) break;
     const call = rawCall as Record<string, unknown>;
+    const toolCode = String(call.tool ?? call.toolCode ?? call.code ?? '').trim();
     const toolRef = String(call.toolRef ?? call.tool_ref ?? '').trim();
     const serverId = String(call.serverId ?? call.server_id ?? '').trim();
     const toolName = String(call.toolName ?? call.tool_name ?? call.name ?? '').trim();
-    if (!toolRef && !toolName) continue;
-    const matchingTools = tools.filter(({ server, tool }) => toolRef
-      ? mcpToolRef(server.id, tool.name) === toolRef
-      : tool.name === toolName && (!serverId || server.id === serverId));
+    if (!toolCode && !toolRef && !toolName) continue;
+    const compactTool = toolCode ? catalog.resolve(toolCode)?.resolvedTool : undefined;
+    const matchingTools = compactTool
+      ? [compactTool]
+      : tools.filter(({ server, tool }) => toolRef
+        ? mcpToolRef(server.id, tool.name) === toolRef
+        : tool.name === toolName && (!serverId || server.id === serverId));
     if (matchingTools.length !== 1) continue;
     const rawArguments = call.arguments ?? call.args ?? call.input;
     const args = rawArguments && typeof rawArguments === 'object' && !Array.isArray(rawArguments)
@@ -3375,7 +3540,45 @@ function formatMcpAgentEvents(events: CompletedMcpToolCall[], sentPreludes: stri
   return entries.length ? entries.join('\n') : '本轮尚未发送消息或调用工具。';
 }
 
-async function generateMcpAgentTurn(input: GenerateReplyInput, basePrompt: string, tools: ResolvedMcpTool[], events: CompletedMcpToolCall[], sentPreludes: string[], remainingCalls: number, imageParts: TextApiContentPart[]): Promise<McpAgentTurn> {
+function mcpPlannerTraceLayers(baseLayers: ChatPromptLayerTrace[], prompt: string, basePrompt: string, eventsText: string, catalog: ReturnType<typeof createMcpPlannerCatalog>, tools: ResolvedMcpTool[]) {
+  const layers = baseLayers.map((layer) => ({ ...layer }));
+  const realityCatalogText = catalog.entries
+    .filter((_entry, index) => tools[index]?.server.kind === 'reality')
+    .map((entry) => JSON.stringify(entry))
+    .join('');
+  const otherCatalogText = catalog.entries
+    .filter((_entry, index) => tools[index]?.server.kind !== 'reality')
+    .map((entry) => JSON.stringify(entry))
+    .join('');
+  const additionalLayers = [
+    realityCatalogText ? { id: 'mcp-reality-catalog', title: 'Reality MCP 工具目录', text: realityCatalogText } : null,
+    otherCatalogText ? { id: 'mcp-other-catalog', title: '其他 MCP 工具目录', text: otherCatalogText } : null,
+    { id: 'mcp-events', title: '本轮 MCP 行动与工具结果', text: eventsText }
+  ].filter((layer): layer is { id: string; title: string; text: string } => Boolean(layer));
+  const accountedCharacters = additionalLayers.reduce((total, layer) => total + layer.text.length, 0);
+  const additionalCharacters = Math.max(0, prompt.length - basePrompt.length);
+  const remainingCharacters = Math.max(0, additionalCharacters - accountedCharacters);
+  if (remainingCharacters) {
+    layers.push({
+      id: 'mcp-planner-rules',
+      title: 'MCP 行动规划规则与当前时间',
+      characters: remainingCharacters,
+      estimatedTokens: Math.max(0, estimateTokenCount(prompt.slice(basePrompt.length)) - additionalLayers.reduce((total, layer) => total + estimateTokenCount(layer.text), 0))
+    });
+  }
+  layers.push(...additionalLayers.map((layer) => ({
+    id: layer.id,
+    title: layer.title,
+    characters: layer.text.length,
+    estimatedTokens: estimateTokenCount(layer.text)
+  })));
+  return layers;
+}
+
+async function generateMcpAgentTurn(input: GenerateReplyInput, basePrompt: string, basePromptLayers: ChatPromptLayerTrace[], tools: ResolvedMcpTool[], events: CompletedMcpToolCall[], sentPreludes: string[], remainingCalls: number, requestNumber: number, imageParts: TextApiContentPart[]): Promise<McpAgentTurn> {
+  const catalog = createMcpPlannerCatalog(tools);
+  const eventsText = formatMcpAgentEvents(events, sentPreludes);
+  const currentTimeText = formatUserTimePreview(new Date(input.timeAwarenessNow ?? Date.now()));
   const plannerModeInstruction = input.mode === 'online'
     ? `当前是线上聊天。目录中的工具来自当前角色已绑定且启用的 MCP 服务；该角色可以直接调用服务内所有工具。
 角色可以使用已绑定的 MCP，但必须先区分工具作用对象。BabyLink Reality MCP 作用于用户当前设备，不代表角色拥有真实手机或现实设备。角色不得把用户设备的数据说成自己的数据。每轮先主动扫描人设、长期记忆、对话摘要、近期聊天、本轮用户表达和当前现实时间：只要某个已绑定工具能让当前回应更具体、让角色正在做的事真正推进，或能及时取得用户正在关心的外部事实，就由角色自己发起调用，不要等待用户说“调用 MCP”“帮我查工具”或给出完整命令。
@@ -3399,31 +3602,36 @@ ${plannerModeInstruction}
 5. 没有用户明示但角色确实想做的主动行动，必须能从角色设定、既定计划、已知社交关系、当前时间或已发生的工具结果中找到依据；主动性来自角色的生活和判断，不来自凭空制造任务。
 
 本轮当前现实时间（以此为唯一“现在”，不要使用历史消息时间推断日期）：
-${formatUserTimePreview(new Date(input.timeAwarenessNow ?? Date.now()))}
+${currentTimeText}
 
 本轮已经发生的 MCP 行动（和普通聊天一样属于当前上下文）：
-${formatMcpAgentEvents(events, sentPreludes)}
+${eventsText}
 
 当前角色可用的完整工具目录：
-${JSON.stringify(mcpPlannerToolCatalog(tools), null, 2)}
+每项依次为 [代码, 工具名, 标题, 完整说明, 写入标记, 参数 schema]；写入标记 0=只读、1=会修改/发送。schema 缩写：t=type、p=properties、r=required、d=description、e=enum、i=items、min/max=数值范围、minL/maxL=字符串长度、minI/maxI=数组长度、fmt=format、def=default、ap=additionalProperties、one/any/all=组合 schema、c=const、pat=pattern、ref=$ref、defs=$defs。未知键保持原名。
+${JSON.stringify(catalog.entries)}
 
 规则：
 1. 每轮都要完成一次主动机会扫描：能明显提升当前回复真实性、具体性或行动完成度的低风险工具，优先主动调用；确实没有合适机会时才返回空数组。
-2. toolRef、serverId 与 toolName 必须从目录逐字选择，arguments 必须符合 inputSchema；不得编造工具或参数。
+2. calls[].tool 必须使用目录中的代码，args 必须符合对应 schema；不得编造工具或参数。
 3. 还可以执行 ${remainingCalls} 次工具调用。每次只返回 0 或 1 个调用，便于先读取上一步真实结果再继续行动。
 4. 创建日程、提醒或闹钟时，所有 ISO 8601 时间必须相对于上面的当前现实时间，不能使用历史聊天里的旧日期；开始时间早于当前时间时不要调用写入工具。
-5. 只输出一个完整角色回复 JSON，并在顶层额外加入 calls：{"messages":[...],"messageActions":{...},"profileUpdate":{...},"calls":[{"toolRef":"serverId:toolName","serverId":"...","toolName":"...","arguments":{}}]}。不调用工具时 calls 必须是 []。
+5. 只输出一个完整角色回复 JSON，并在顶层额外加入 calls：{"messages":[...],"messageActions":{...},"profileUpdate":{...},"calls":[{"tool":"目录中的工具代码","args":{}}]}。不调用工具时 calls 必须是 []。
 6. calls 非空时，messages 可以为空，也可以包含任意数量自然的 type 为 text 的行动前消息；它们会在工具执行前立刻真实发给用户。角色应自行决定是否有必要先说话、要说几句。可以自然表达“我去查一下”“我现在处理”等行动，但绝不能把未得到的工具结果说成已经查到、已经完成或已经发送。
 7. 上面标为 already-sent-role-messages 的内容已经真实发出，后续 messages 绝不能重复它们。`;
   const apiResult = await callTextApiDetailed(input.settings, prompt, input.modelOverride, imageParts, {
     jsonMode: true,
     maxTokens: 8_192,
     retryTransientFailures: input.requestRecovery?.retryTransientFailures,
+    trace: {
+      label: `MCP 行动规划 · 请求 ${requestNumber}`,
+      layers: mcpPlannerTraceLayers(basePromptLayers, prompt, basePrompt, eventsText, catalog, tools)
+    },
     ...roleplayStreamingOptions(input)
   });
   const parsed = parseModelJsonResponse(apiResult.text);
   return {
-    calls: normalizeMcpPlannedCalls(parsed, tools, remainingCalls > 0 ? 1 : 0),
+    calls: normalizeMcpPlannedCalls(parsed, tools, remainingCalls > 0 ? 1 : 0, catalog),
     replyPayload: normalizeRoleplayReplyPayload(apiResult.text, input),
     apiResult
   };
@@ -3490,24 +3698,25 @@ function toChatMcpOperation(operationId: string, serverId: string, serverName: s
   };
 }
 
-async function collectMcpReplyContext(input: GenerateReplyInput, basePrompt: string, imageParts: TextApiContentPart[]) {
+async function collectMcpReplyContext(input: GenerateReplyInput, basePrompt: string, basePromptLayers: ChatPromptLayerTrace[], imageParts: TextApiContentPart[]) {
   if (input.mode !== 'online') {
-    return { context: '', structuredResults: [] as ChatMcpResultAttachment[], toolCalls: [] as ChatMcpToolCallTrace[], operations: [] as ChatMcpOperation[], finalReplyPayload: '', finalApiResult: undefined as TextGenerationResult | undefined };
+    return { context: '', structuredResults: [] as ChatMcpResultAttachment[], toolCalls: [] as ChatMcpToolCallTrace[], operations: [] as ChatMcpOperation[], apiCalls: [] as ChatApiCallTrace[], finalReplyPayload: '', finalApiResult: undefined as TextGenerationResult | undefined };
   }
   const tools = resolveMcpTools(input.settings, input.character);
-  if (!tools.length) return { context: '', structuredResults: [] as ChatMcpResultAttachment[], toolCalls: [] as ChatMcpToolCallTrace[], operations: [] as ChatMcpOperation[], finalReplyPayload: '', finalApiResult: undefined as TextGenerationResult | undefined };
+  if (!tools.length) return { context: '', structuredResults: [] as ChatMcpResultAttachment[], toolCalls: [] as ChatMcpToolCallTrace[], operations: [] as ChatMcpOperation[], apiCalls: [] as ChatApiCallTrace[], finalReplyPayload: '', finalApiResult: undefined as TextGenerationResult | undefined };
   const maxCalls = Math.max(1, Math.min(6, input.settings?.mcpSettings.maxToolCallsPerReply ?? 2));
   const completedCalls: CompletedMcpToolCall[] = [];
   const structuredResults: ChatMcpResultAttachment[] = [];
   const toolCalls: ChatMcpToolCallTrace[] = [];
   const operations: ChatMcpOperation[] = [];
+  const apiCalls: ChatApiCallTrace[] = [];
   const sentPreludes: string[] = [];
   let finalReplyPayload = '';
   let finalApiResult: TextGenerationResult | undefined;
   for (let callIndex = 0; callIndex <= maxCalls; callIndex += 1) {
     let agentTurn: McpAgentTurn;
     try {
-      agentTurn = await generateMcpAgentTurn(input, basePrompt, tools, completedCalls, sentPreludes, maxCalls - callIndex, imageParts);
+      agentTurn = await generateMcpAgentTurn(input, basePrompt, basePromptLayers, tools, completedCalls, sentPreludes, maxCalls - callIndex, callIndex + 1, imageParts);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'MCP 行动规划失败。';
       completedCalls.push({
@@ -3520,6 +3729,7 @@ async function collectMcpReplyContext(input: GenerateReplyInput, basePrompt: str
       });
       break;
     }
+    if (agentTurn.apiResult.requestTrace) apiCalls.push(agentTurn.apiResult.requestTrace);
     const plannedCall = agentTurn.calls[0];
     if (!plannedCall) {
       finalReplyPayload = agentTurn.replyPayload;
@@ -3608,9 +3818,43 @@ ${resultPayload}
     structuredResults,
     toolCalls,
     operations,
+    apiCalls,
     finalReplyPayload,
     finalApiResult
   };
+}
+
+function summarizeApiCallUsage(apiCalls: ChatApiCallTrace[]) {
+  const inputValues = apiCalls.map((call) => call.usage?.inputTokens).filter((value): value is number => value !== undefined);
+  const outputValues = apiCalls.map((call) => call.usage?.outputTokens).filter((value): value is number => value !== undefined);
+  const totalValues = apiCalls.map((call) => {
+    if (call.usage?.totalTokens !== undefined) return call.usage.totalTokens;
+    if (call.usage?.inputTokens !== undefined && call.usage?.outputTokens !== undefined) return call.usage.inputTokens + call.usage.outputTokens;
+    return undefined;
+  });
+  const reportedCallCount = totalValues.filter((value): value is number => value !== undefined).length;
+  const usage = inputValues.length || outputValues.length || reportedCallCount
+    ? {
+        ...(inputValues.length ? { inputTokens: inputValues.reduce((total, value) => total + value, 0) } : {}),
+        ...(outputValues.length ? { outputTokens: outputValues.reduce((total, value) => total + value, 0) } : {}),
+        ...(reportedCallCount ? { totalTokens: totalValues.filter((value): value is number => value !== undefined).reduce((total, value) => total + value, 0) } : {})
+      }
+    : undefined;
+  return {
+    usage,
+    usageComplete: apiCalls.length > 0 && reportedCallCount === apiCalls.length,
+    usageReportedCallCount: reportedCallCount
+  };
+}
+
+function finalReplyTraceLayers(baseLayers: ChatPromptLayerTrace[], mcpContext: string) {
+  const layers = baseLayers.map((layer) => ({ ...layer }));
+  if (!mcpContext) return layers;
+  layers.push(
+    { id: 'mcp-context-separator', title: 'MCP 上下文分隔', characters: 2, estimatedTokens: 0 },
+    { id: 'mcp-result-context', title: 'MCP 工具结果与本轮行动记录', characters: mcpContext.length, estimatedTokens: estimateTokenCount(mcpContext) }
+  );
+  return layers;
 }
 
 function attachReplyTrace(payload: string, apiResult: TextGenerationResult, mcpReply: Awaited<ReturnType<typeof collectMcpReplyContext>>, input: GenerateReplyInput) {
@@ -3622,6 +3866,10 @@ function attachReplyTrace(payload: string, apiResult: TextGenerationResult, mcpR
   const visibleReasoning = activeThoughtChainTheme
     ? extractThoughtChainContent(rawThoughtChain, activeThoughtChainTheme.regex)
     : '';
+  const apiCalls = [...mcpReply.apiCalls];
+  if (apiResult.requestTrace && !apiCalls.includes(apiResult.requestTrace)) apiCalls.push(apiResult.requestTrace);
+  const usageSummary = summarizeApiCallUsage(apiCalls);
+  const traceUsage = usageSummary.usage ?? apiResult.usage;
   const apiTrace: ChatApiTrace = {
     generatedAt: Date.now(),
     model: apiResult.model?.trim() || '',
@@ -3638,7 +3886,8 @@ function attachReplyTrace(payload: string, apiResult: TextGenerationResult, mcpR
     } : {}),
     ...(apiResult.finishReason ? { finishReason: apiResult.finishReason } : {}),
     ...(apiResult.status ? { status: apiResult.status } : {}),
-    ...(apiResult.usage ? { usage: apiResult.usage } : {}),
+    ...(traceUsage ? { usage: traceUsage } : {}),
+    ...(apiCalls.length ? { usageComplete: usageSummary.usageComplete, usageReportedCallCount: usageSummary.usageReportedCallCount, apiCalls } : {}),
     mcpToolCalls: mcpReply.toolCalls,
     ...(mcpReply.operations.length ? { mcpOperations: mcpReply.operations } : {})
   };
@@ -3652,9 +3901,10 @@ function attachReplyTrace(payload: string, apiResult: TextGenerationResult, mcpR
 
 export async function generateRoleplayReply(input: GenerateReplyInput): Promise<string> {
   requireTextGenerationConfig(input.settings, input.modelOverride, '角色回复');
-  const basePrompt = buildPrompt(input, { includeCurrentTurnStickerImages: true });
+  const basePromptBuild = buildPromptWithTrace(input, { includeCurrentTurnStickerImages: true });
+  const basePrompt = basePromptBuild.prompt;
   const imageParts = await getPreparedVisualImageParts(input);
-  const mcpReply = await collectMcpReplyContext(input, basePrompt, imageParts);
+  const mcpReply = await collectMcpReplyContext(input, basePrompt, basePromptBuild.layers, imageParts);
   if (mcpReply.finalReplyPayload) {
     return attachReplyTrace(mcpReply.finalReplyPayload, mcpReply.finalApiResult!, mcpReply, input);
   }
@@ -3663,37 +3913,13 @@ export async function generateRoleplayReply(input: GenerateReplyInput): Promise<
     jsonMode: true,
     maxTokens: 8192,
     retryTransientFailures: input.requestRecovery?.retryTransientFailures,
+    trace: {
+      label: mcpReply.context ? '工具结果后的最终回复' : '角色回复',
+      layers: finalReplyTraceLayers(basePromptBuild.layers, mcpReply.context)
+    },
     ...roleplayStreamingOptions(input)
   });
-  try {
-    return attachReplyTrace(normalizeRoleplayReplyPayload(apiResult.text, input), apiResult, mcpReply, input);
-  } catch (error) {
-    if (!(error instanceof RoleplayReplyFormatError)) throw error;
-    if (input.requestRecovery?.retryMalformedRoleplayJson === false) {
-      throw new Error('角色回复模型返回的 JSON 格式损坏。已关闭自动重新生成，请修正模型输出或在“更多”中开启该选项后重试。');
-    }
-  }
-
-  const retryResult = await callTextApiDetailed(
-    input.settings,
-    `${prompt}\n\n${roleplayFormatRetryInstruction}`,
-    input.modelOverride,
-    imageParts,
-    {
-      jsonMode: true,
-      maxTokens: 8192,
-      retryTransientFailures: input.requestRecovery?.retryTransientFailures,
-      ...roleplayStreamingOptions(input)
-    }
-  );
-  try {
-    return attachReplyTrace(normalizeRoleplayReplyPayload(retryResult.text, input), retryResult, mcpReply, input);
-  } catch (error) {
-    if (error instanceof RoleplayReplyFormatError) {
-      throw new Error('角色回复模型连续两次返回损坏的 JSON，已阻止将原始 JSON 显示为聊天内容。请重试或切换模型。');
-    }
-    throw error;
-  }
+  return attachReplyTrace(normalizeRoleplayReplyPayload(apiResult.text, input), apiResult, mcpReply, input);
 }
 
 export async function generateVoomPost(context: PromptContext, settings?: AppSettings, modelOverride = ''): Promise<Omit<VoomPost, 'id' | 'createdAt'>> {
@@ -4594,7 +4820,8 @@ export async function generateGroupChatReply(input: {
       `知识边界：这一段只允许用于扮演${characterName}。其他群成员不能因为模型看到了这段内容就知道其中的私聊、记忆或局部世界书；除非相关事实已经在群聊中公开或被当事人转述。`
     ].join('\n');
   }).join('\n\n---\n\n');
-  const stickerList = (input.availableStickers ?? []).slice(0, 80).map((sticker) => `${sticker.id}: ${sticker.description}`).join('\n');
+  const stickerCatalog = createCompactStickerPromptCatalog((input.availableStickers ?? []).slice(0, 80));
+  const stickerList = stickerCatalog.entries.map(([code, description]) => `${code}|${description}`).join('\n');
   const prompt = `你是 LINK 群聊的消息导演，同时严格扮演群内角色和 NPC。当前模式是${mode === 'offline' ? '群聊线下 RP：所有群成员处于同一现实场景，以章节正文推进共同剧情' : '线上群聊：以真实社交软件消息推进对话'}。根据用户刚发出的内容与完整上下文，决定自然会回应或行动的成员并生成本轮内容。
 
 群名：${input.groupName}
@@ -4615,14 +4842,14 @@ ${input.history || '暂无'}
 
 本轮任务：${input.instruction || (input.proactive ? '没有用户刚发来的新消息。请根据时间流逝和群内生活节奏，生成一轮自然的主动群消息。' : '回应最近发生的群聊。')}
 
-可用 Sticker（只能使用列表中的 id）：
+可用 Sticker（只能使用列表中的代码）：
 ${stickerList || '无'}
 
 规则：
 1. 只允许成员表里的角色发言，绝不代替用户发言；authorMemberId 必须来自成员表。
 2. ${mode === 'offline' ? '这是群聊线下 RP。每条 content 都是该成员视角下可直接展示的沉浸式章节正文，包含必要的场景、动作、神情、对白与多人互动；不得写成聊天气泡口吻，不得替用户决定、行动或发言。输出 1-4 个自然章节，不要机械轮流。' : '像真实群聊：允许无人回复、单人回复、多人插话、连续多条、引用、@、跑题与沉默；本轮输出 0-8 条，不要机械轮流。需要引用最近群聊中的历史消息时，在该条消息填写 quoteMessageId；可以引用用户、其他成员，也可以自然引用该发言成员自己此前发过的消息。只能填写最近群聊里方括号标出的真实消息 ID，不要在 content 中复述被引用内容。'}
 3. 已有角色必须同时结合自己的角色设定、与用户的一对一会话总结、记忆手册、近期私聊/线下对话和世界书，不得把群聊当作孤立世界；每个角色只能使用自己专属上下文里的私密知识，不能读取、暗示或利用其他角色的专属上下文，也不能知道自己未参与且未被转述的秘密。
-4. ${mode === 'offline' ? '线下模式的 type 必须为 text。' : 'type 可为 text、voice、image、sticker。voice 的 content 是语音转写；image 的 content 是图片画面描述；sticker 必须填写 stickerId，content 可填贴纸含义。'}
+4. ${mode === 'offline' ? '线下模式的 type 必须为 text。' : 'type 可为 text、voice、image、sticker。voice 的 content 是语音转写；image 的 content 是图片画面描述；sticker 必须填写 stickerId 为列表代码，content 可填贴纸含义。'}
 5. 如果群内情境让某个已有角色很自然地想单独联系用户，可在 privateInitiations 放入该角色ID和原因；最多 1 个，不能使用 NPC，不能每轮都触发。
 6. 如果当前用户状态为 pending，群主或管理员可根据群设定和上下文决定是否通过申请，在 membershipDecision 输出 approve、reject 或 null；其他状态必须输出 null。
 7. 群内出现匿名小号消息时，不得推断、暗示或泄露它与当前用户的真实身份关系。
@@ -4639,7 +4866,7 @@ ${stickerList || '无'}
     const authorMemberId = String(record.authorMemberId ?? '').trim();
     const content = String(record.content ?? '').trim();
     const requestedType = String(record.type ?? 'text').trim();
-    const stickerId = String(record.stickerId ?? '').trim();
+    const stickerId = stickerCatalog.resolve(String(record.stickerId ?? '').trim()) ?? String(record.stickerId ?? '').trim();
     const quoteMessageId = mode === 'online' ? String(record.quoteMessageId ?? '').trim() : '';
     const type = mode === 'offline' ? 'text' : requestedType === 'voice' || requestedType === 'image' || requestedType === 'sticker' ? requestedType : 'text';
     if (!allowedMembers.has(authorMemberId) || (!content && type !== 'sticker')) return [];

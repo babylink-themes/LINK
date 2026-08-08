@@ -461,7 +461,6 @@ export interface ChatMemorySettings {
 
 export interface ConversationRequestRecoverySettings {
   retryTransientFailures: boolean;
-  retryMalformedRoleplayJson: boolean;
 }
 
 export interface ConversationTimeAwarenessSettings {
@@ -766,6 +765,24 @@ export interface ChatApiUsage {
   totalTokens?: number;
 }
 
+export interface ChatPromptLayerTrace {
+  id: string;
+  title: string;
+  characters: number;
+  estimatedTokens: number;
+  imageCount?: number;
+}
+
+export interface ChatApiCallTrace {
+  label: string;
+  model: string;
+  requestId?: string;
+  usage?: ChatApiUsage;
+  promptCharacters: number;
+  estimatedInputTokens: number;
+  layers: ChatPromptLayerTrace[];
+}
+
 export type ChatMcpOperationState = 'running' | 'completed' | 'initiated' | 'awaiting-user' | 'requires-permission' | 'cancelled' | 'unsupported' | 'unknown' | 'failed';
 
 export interface ChatMcpOperation {
@@ -804,6 +821,9 @@ export interface ChatApiTrace {
   finishReason?: string;
   status?: string;
   usage?: ChatApiUsage;
+  usageComplete?: boolean;
+  usageReportedCallCount?: number;
+  apiCalls?: ChatApiCallTrace[];
   mcpToolCalls: ChatMcpToolCallTrace[];
   mcpOperations?: ChatMcpOperation[];
 }

@@ -120,7 +120,7 @@ Message union:
 - takeout: {"type":"takeout","storeName":"店名","items":[{"name":"餐品","quantity":1,"price":"32.00"}],"totalAmount":"38.00","eta":"预计35分钟送达","note":"可空"}.
 - gift: {"type":"gift","storeName":"店名","items":[{"name":"礼物","quantity":1,"price":"199.00"}],"totalAmount":"199.00","cardMessage":"专属卡片，可空","note":"可空"}.
 - shopping: {"type":"shopping","storeName":"店名","items":[{"name":"商品","quantity":1,"price":"199.00"}],"totalAmount":"199.00","note":"可空"}.
-- sticker: {"type":"sticker","stickers":["allowed Sticker id"]}.
+- sticker: {"type":"sticker","stickers":["allowed Sticker code"]}.
 - narration: {"type":"narration","content":"third-person narration"} only when narration rules allow it or to show a profile change.
 - music_action: {"type":"music_action","actionIndex":0}, where actionIndex references messageActions.musicActions.
 

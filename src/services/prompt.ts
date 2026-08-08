@@ -1,13 +1,14 @@
-import type { ChatMode, ConversationOfflineSettings, ConversationRoleGuidanceSettings, OfflinePromptPreset, OfflineStructureKind, PromptContext, WorldBookEntry, WorldBookLoreEntry } from '@/types/domain';
+import type { ChatMode, ChatPromptLayerTrace, ConversationOfflineSettings, ConversationRoleGuidanceSettings, OfflinePromptPreset, OfflineStructureKind, PromptContext, WorldBookEntry, WorldBookLoreEntry } from '@/types/domain';
 import { offlineGuidancePrompts } from '@/data/offlineGuidance';
 import { onlineCallResponsePrompt, onlineCoreRoleplayPrompt, onlineGobangResponsePrompt, onlineInputSemanticsPrompt, onlineNarrationPrompt, onlinePendingMusicInvitePrompt, onlinePendingTransferPrompt, onlinePunctuationPrompt, onlineRelationshipEventPrompt, onlineReplyProtocolPrompt, onlineRoleGuidancePrompts, onlineRoutineCarePrompt, onlineStickerPrompt } from '@/data/onlinePrompts';
 import { normalizeTimeAwarenessSettings, renderTimeAwarenessPrompt } from '@/utils/timeAwareness';
-import { activeOfflineTonePreset, activeOfflineWritingStylePreset, defaultOfflineSettings, normalizeOfflineSettings, normalizeRoleGuidanceSettings } from '@/utils/memory';
+import { activeOfflineTonePreset, activeOfflineWritingStylePreset, defaultOfflineSettings, estimateTokenCount, normalizeOfflineSettings, normalizeRoleGuidanceSettings } from '@/utils/memory';
 import { getCurrentUserTurnMessages } from '@/utils/messageTurns';
 import { getCharacterAiName } from '@/utils/character';
 import { formatChatMcpOperations } from '@/utils/mcpOperations';
 import { getUserAiName } from '@/utils/profile';
 import { isTabooWorldBook } from '@/utils/worldBook';
+import { createCompactReferenceCatalog, createCompactStickerPromptCatalog } from '@/utils/promptCatalog';
 
 export const baseRoleplayPrompt = `你是{{char}}。
 
@@ -1018,11 +1019,10 @@ function renderWorldBooks(entries: WorldBookEntry[], context: PromptContext) {
 function renderAvailableStickers(context: PromptContext) {
   const stickers = context.availableStickers ?? [];
   if (!stickers.length) return '当前没有允许你主动发送的 Stickers。';
+  const catalog = createCompactStickerPromptCatalog(stickers.map((sticker) => ({ id: sticker.stickerId, description: sticker.description })));
   return [
-    '你可以在合适时主动发送 Stickers，但只能从下面列表中选择。',
-    '如果要发送，在 messages 中加入 { "type":"sticker", "stickers":["Sticker id或文字描述"] }。',
-    'Sticker 的顺序由 messages 的位置决定；不要编造列表外的 Sticker。',
-    ...stickers.map((sticker) => `- id: ${sticker.stickerId}；描述: ${sticker.description}`)
+    '仅可用下表代码发送 Sticker；每行是「代码|完整语义」，不得编造。',
+    ...catalog.entries.map(([code, description]) => `${code}|${description}`)
   ].join('\n');
 }
 
@@ -1106,7 +1106,70 @@ export function selectWorldBooks(context: PromptContext) {
   });
 }
 
-export function buildPrompt(context: PromptContext, options: { includeOnlineChatPunctuation?: boolean; includeOnlineStickerSemantics?: boolean; includeOnlineRoutineCare?: boolean; includeAvailableStickers?: boolean; includeOnlineReplyTools?: boolean; includeCurrentTurnStickerImages?: boolean; outputPromptOverride?: string } = {}) {
+export interface PromptBuildOptions {
+  includeOnlineChatPunctuation?: boolean;
+  includeOnlineStickerSemantics?: boolean;
+  includeOnlineRoutineCare?: boolean;
+  includeAvailableStickers?: boolean;
+  includeOnlineReplyTools?: boolean;
+  includeCurrentTurnStickerImages?: boolean;
+  outputPromptOverride?: string;
+}
+
+export interface PromptBuildTrace {
+  prompt: string;
+  layers: ChatPromptLayerTrace[];
+}
+
+interface PromptTraceSegment {
+  text: string;
+  layers?: ChatPromptLayerTrace[];
+}
+
+function promptTraceLayer(id: string, title: string, text: string, imageCount?: number): ChatPromptLayerTrace {
+  return {
+    id,
+    title,
+    characters: text.length,
+    estimatedTokens: estimateTokenCount(text),
+    ...(imageCount ? { imageCount } : {})
+  };
+}
+
+function roleplayTraceLayers(mode: ChatMode, text: string): ChatPromptLayerTrace[] {
+  const boundary = mode === 'online'
+    ? '\n\n【事实与认知边界】'
+    : '\n\n══════════════════════════════════════\n第一章  行为底层规则';
+  const boundaryIndex = text.indexOf(boundary);
+  if (boundaryIndex <= 0) return [promptTraceLayer('base-roleplay', '基础层：角色设定与规则', text)];
+  return [
+    promptTraceLayer('role-profile', '角色设定与用户资料', text.slice(0, boundaryIndex)),
+    promptTraceLayer('base-rules', '基础层：角色规则与边界', text.slice(boundaryIndex))
+  ];
+}
+
+function worldBookTraceLayers(text: string, selectedWorldBooks: WorldBookEntry[], context: PromptContext): ChatPromptLayerTrace[] {
+  const localWorldBooks = renderWorldBooks(selectedWorldBooks.filter((book) => book.scope === 'local'), context);
+  const globalWorldBooks = renderWorldBooks(selectedWorldBooks.filter((book) => book.scope === (context.mode === 'online' ? 'global-online' : 'global-offline')), context);
+  const layers: ChatPromptLayerTrace[] = [];
+  if (localWorldBooks) layers.push(promptTraceLayer('local-world-books', '局部世界书', localWorldBooks));
+  if (globalWorldBooks) layers.push(promptTraceLayer(context.mode === 'online' ? 'online-world-books' : 'offline-world-books', context.mode === 'online' ? '线上全局世界书' : '线下全局世界书', globalWorldBooks));
+  const accountedCharacters = layers.reduce((total, layer) => total + layer.characters, 0);
+  const accountedTokens = layers.reduce((total, layer) => total + layer.estimatedTokens, 0);
+  const residualCharacters = Math.max(0, text.length - accountedCharacters);
+  const residualTokens = Math.max(0, estimateTokenCount(text) - accountedTokens);
+  if (residualCharacters || !layers.length) {
+    layers.unshift({
+      id: 'world-book-frame',
+      title: '世界书框架与命中状态',
+      characters: residualCharacters || text.length,
+      estimatedTokens: residualTokens || estimateTokenCount(text)
+    });
+  }
+  return layers;
+}
+
+export function buildPromptWithTrace(context: PromptContext, options: PromptBuildOptions = {}): PromptBuildTrace {
   const selectedWorldBooks = selectWorldBooks(context);
   const outputPrompt = options.outputPromptOverride ?? (context.mode === 'online' ? onlineReplyProtocolPrompt : offlineReplyOutputPrompt);
   const roleplayPrompt = context.mode === 'online' ? onlineCoreRoleplayPrompt : `${baseRoleplayPrompt}\n\n${strictRoleplayRules}`;
@@ -1126,18 +1189,19 @@ export function buildPrompt(context: PromptContext, options: { includeOnlineChat
       .slice(-4)
       .map((message) => message.id)
     : []);
+  const historyReferences = createCompactReferenceCatalog(context.messages.map((message) => message.id));
   const history = context.messages
     .map((message) => {
       const speaker = message.sender === 'user'
-        ? boundUserName
+        ? 'U'
         : message.sender === 'char'
-          ? getCharacterAiName(context.character)
-          : '系统';
+          ? 'C'
+          : 'S';
       const quoteAuthorName = message.quote?.sender === 'user'
-        ? boundUserName
+        ? 'U'
         : message.quote?.sender === 'char'
-          ? getCharacterAiName(context.character)
-          : '系统';
+          ? 'C'
+          : 'S';
       const quoteText = message.quote
         ? `引用 ${quoteAuthorName}: ${getMessageText(message.quote)}\n`
         : '';
@@ -1150,12 +1214,10 @@ export function buildPrompt(context: PromptContext, options: { includeOnlineChat
             : '（识图关闭，仅可读取文字描述）'}`
         : messageText;
       const sentAtText = includeMessageTime ? `（发送时间：${formatPromptMessageTime(message.createdAt)}）` : '';
-      return `[${message.id}] ${speaker}${sentAtText}: ${quoteText}${visualText}`;
+      return `[${historyReferences.codeFor(message.id) ?? message.id}] ${speaker}${sentAtText}: ${quoteText}${visualText}`;
     })
     .join('\n');
-
-  return [
-    replaceTokens(`${roleplayPrompt}\n\n${outputPrompt}`, {
+  const templateTokens = {
       '{{char}}': characterName,
       '{{char_nickname}}': replacePromptIdentityTokens(context.character.nickname, context),
       '{{char_signature}}': replacePromptIdentityTokens(context.character.signature, context),
@@ -1164,36 +1226,37 @@ export function buildPrompt(context: PromptContext, options: { includeOnlineChat
       '{{user_description}}': replacePromptIdentityTokens(context.user.description, context),
       '{{bound_user_nickname}}': replacePromptIdentityTokens(context.boundUser.nickname, context),
       '{{bound_user_signature}}': replacePromptIdentityTokens(context.boundUser.signature, context)
-    }),
-    modeInstructions[context.mode],
-    context.mode === 'offline' ? renderOfflineSettingsPrompt(context.offlineSettings, context) : '',
-    context.mode === 'online' ? renderRoleGuidanceInstruction(normalizeRoleGuidanceSettings(context.onlineGuidance), 'online') : '',
-    context.mode === 'online' && options.includeOnlineChatPunctuation !== false ? onlinePunctuationPrompt : '',
-    context.mode === 'online' && options.includeOnlineRoutineCare !== false ? replaceTokens(onlineRoutineCarePrompt, { '{{char}}': characterName, '{{user}}': boundUserName || userName }) : '',
-    context.mode === 'online' && options.includeOnlineStickerSemantics !== false ? onlineStickerPrompt : '',
-    context.mode === 'online' && includeOnlineReplyTools && context.narrationModeEnabled
+  };
+  const renderedRoleplayPrompt = replaceTokens(roleplayPrompt, templateTokens);
+  const renderedOutputPrompt = replaceTokens(outputPrompt, templateTokens);
+  const modePrompt = modeInstructions[context.mode];
+  const offlineSettingsPrompt = context.mode === 'offline' ? renderOfflineSettingsPrompt(context.offlineSettings, context) : '';
+  const onlineGuidancePrompt = context.mode === 'online' ? renderRoleGuidanceInstruction(normalizeRoleGuidanceSettings(context.onlineGuidance), 'online') : '';
+  const punctuationPrompt = context.mode === 'online' && options.includeOnlineChatPunctuation !== false ? onlinePunctuationPrompt : '';
+  const routineCarePrompt = context.mode === 'online' && options.includeOnlineRoutineCare !== false ? replaceTokens(onlineRoutineCarePrompt, { '{{char}}': characterName, '{{user}}': boundUserName || userName }) : '';
+  const stickerSemanticsPrompt = context.mode === 'online' && options.includeOnlineStickerSemantics !== false ? onlineStickerPrompt : '';
+  const narrationPrompt = context.mode === 'online' && includeOnlineReplyTools && context.narrationModeEnabled
       ? replaceTokens(onlineNarrationPrompt, {
           '{{char}}': characterName,
           '{{user}}': boundUserName || userName
         })
-      : '',
-    context.mode === 'online' && includeOnlineReplyTools && context.offlineInvitationEnabled === false
+      : '';
+  const offlineInvitationRestrictionPrompt = context.mode === 'online' && includeOnlineReplyTools && context.offlineInvitationEnabled === false
       ? '线下邀约功能当前已关闭：本轮以及后续线上回复都禁止发起线下邀约，messageActions.offlineInvitation 必须固定为 null。'
-      : '',
-    timeAwarenessPrompt,
-    context.mode === 'online' && includeOnlineReplyTools ? renderCharacterEconomyPrompt(context) : '',
-    includeMessageTime
+      : '';
+  const economyPrompt = context.mode === 'online' && includeOnlineReplyTools ? renderCharacterEconomyPrompt(context) : '';
+  const historyTimeRulePrompt = includeMessageTime
       ? '时间判定规则：最近对话里的“发送时间”只表示那条历史消息实际发出的时间。回复时先以“现实时间感知”里的当前时间判断现在，再根据历史发送时间推算已经过去多久；不要把最后一条用户消息的发送时间当作当前时间。'
-      : '',
-    `当前对话总结：\n${context.conversationSummary || '暂无总结。'}`,
-    `一起听状态：\n${renderMusicListeningPrompt(context)}`,
-    `记忆手册：\n${context.memorySummary || '暂无记忆手册。'}`,
-    `世界书：\n${renderWorldBooks(selectedWorldBooks, context) || '无启用条目。'}`,
-    context.mode === 'online' && includeOnlineReplyTools
+      : '';
+  const conversationSummaryPrompt = `当前对话总结：\n${context.conversationSummary || '暂无总结。'}`;
+  const musicListeningPrompt = `一起听状态：\n${renderMusicListeningPrompt(context)}`;
+  const memorySummaryPrompt = `记忆手册：\n${context.memorySummary || '暂无记忆手册。'}`;
+  const worldBookPrompt = `世界书：\n${renderWorldBooks(selectedWorldBooks, context) || '无启用条目。'}`;
+  const inputSemanticsPrompt = context.mode === 'online' && includeOnlineReplyTools
       ? replaceTokens(onlineInputSemanticsPrompt, { '{{char}}': characterName })
-      : '',
-    context.mode === 'online' && includeOnlineReplyTools && options.includeAvailableStickers !== false ? `角色可用 Stickers：\n${renderAvailableStickers(context)}` : '',
-    context.mode === 'online' && includeOnlineReplyTools
+      : '';
+  const availableStickersPrompt = context.mode === 'online' && includeOnlineReplyTools && options.includeAvailableStickers !== false ? `角色可用 Stickers：\n${renderAvailableStickers(context)}` : '';
+  const pendingActionPrompt = context.mode === 'online' && includeOnlineReplyTools
       ? [
           onlinePendingTransferPrompt,
           onlinePendingMusicInvitePrompt,
@@ -1201,13 +1264,48 @@ export function buildPrompt(context: PromptContext, options: { includeOnlineChat
           onlineGobangResponsePrompt,
           replaceTokens(onlineRelationshipEventPrompt, { '{{char}}': characterName })
         ].join('\n\n')
-      : '',
-    includeOnlineReplyTools ? renderProfileThemePrompt(context) : '',
-    includeOnlineReplyTools ? renderThoughtChainThemePrompt(context) : '',
-    context.mode === 'online' && context.replyInstruction ? `本次生成任务：\n${context.replyInstruction}` : '',
-    `最近对话：\n${history || '暂无。'}`,
-    `原文窗口规则：本次已按设置保留最近 ${context.historyFloorLimit ?? '指定'} 个完整楼层，共 ${context.historyFloorCount ?? '未知'} 楼、${context.historyMessageCount ?? context.messages.length} 条消息。这里的原文不计入“记忆召回预算”；不得再按固定消息条数截断，也不得把线上与线下拆成两条互不相干的故事。`
-  ].filter(Boolean).join('\n\n');
+      : '';
+  const profileThemePrompt = includeOnlineReplyTools ? renderProfileThemePrompt(context) : '';
+  const thoughtChainThemePrompt = includeOnlineReplyTools ? renderThoughtChainThemePrompt(context) : '';
+  const replyInstructionPrompt = context.mode === 'online' && context.replyInstruction ? `本次生成任务：\n${context.replyInstruction}` : '';
+  const recentHistoryPrompt = `最近对话（U=${boundUserName || userName}，C=${characterName}，S=系统）：\n${history || '暂无。'}`;
+  const historyWindowPrompt = `原文窗口规则：本次已按设置保留最近 ${context.historyFloorLimit ?? '指定'} 个完整楼层，共 ${context.historyFloorCount ?? '未知'} 楼、${context.historyMessageCount ?? context.messages.length} 条消息。这里的原文不计入“记忆召回预算”；不得再按固定消息条数截断，也不得把线上与线下拆成两条互不相干的故事。`;
+  const segments: PromptTraceSegment[] = [
+    { text: renderedRoleplayPrompt, layers: roleplayTraceLayers(context.mode, renderedRoleplayPrompt) },
+    { text: renderedOutputPrompt, layers: [promptTraceLayer('output-protocol', '回复 JSON 协议', renderedOutputPrompt)] },
+    { text: modePrompt, layers: [promptTraceLayer('mode-instruction', '当前模式规则', modePrompt)] },
+    { text: offlineSettingsPrompt, layers: [promptTraceLayer('offline-settings', '线下 RP 设置', offlineSettingsPrompt)] },
+    { text: onlineGuidancePrompt, layers: [promptTraceLayer('online-guidance', '线上角色与世界引导', onlineGuidancePrompt)] },
+    { text: punctuationPrompt, layers: [promptTraceLayer('online-punctuation', '线上标点规则', punctuationPrompt)] },
+    { text: routineCarePrompt, layers: [promptTraceLayer('routine-care', '日常关怀限制', routineCarePrompt)] },
+    { text: stickerSemanticsPrompt, layers: [promptTraceLayer('sticker-semantics', 'Sticker 语义规则', stickerSemanticsPrompt)] },
+    { text: narrationPrompt, layers: [promptTraceLayer('narration-mode', '旁白模式规则', narrationPrompt)] },
+    { text: offlineInvitationRestrictionPrompt, layers: [promptTraceLayer('offline-invitation-restriction', '线下邀约限制', offlineInvitationRestrictionPrompt)] },
+    { text: timeAwarenessPrompt, layers: [promptTraceLayer('time-awareness', '现实时间感知', timeAwarenessPrompt)] },
+    { text: economyPrompt, layers: [promptTraceLayer('character-economy', '角色经济快照', economyPrompt)] },
+    { text: historyTimeRulePrompt, layers: [promptTraceLayer('history-time-rule', '历史时间判定', historyTimeRulePrompt)] },
+    { text: conversationSummaryPrompt, layers: [promptTraceLayer('conversation-summary', '当前对话总结', conversationSummaryPrompt)] },
+    { text: musicListeningPrompt, layers: [promptTraceLayer('music-listening', '一起听状态', musicListeningPrompt)] },
+    { text: memorySummaryPrompt, layers: [promptTraceLayer('memory-summary', '记忆手册', memorySummaryPrompt)] },
+    { text: worldBookPrompt, layers: worldBookTraceLayers(worldBookPrompt, selectedWorldBooks, context) },
+    { text: inputSemanticsPrompt, layers: [promptTraceLayer('input-semantics', '输入消息语义', inputSemanticsPrompt)] },
+    { text: availableStickersPrompt, layers: [promptTraceLayer('available-stickers', '角色可用 Stickers', availableStickersPrompt)] },
+    { text: pendingActionPrompt, layers: [promptTraceLayer('pending-actions', '待处理功能事件', pendingActionPrompt)] },
+    { text: profileThemePrompt, layers: [promptTraceLayer('profile-theme', '角色主页主题', profileThemePrompt)] },
+    { text: thoughtChainThemePrompt, layers: [promptTraceLayer('thought-chain-theme', '可见思维链主题', thoughtChainThemePrompt)] },
+    { text: replyInstructionPrompt, layers: [promptTraceLayer('reply-instruction', '本次生成任务', replyInstructionPrompt)] },
+    { text: recentHistoryPrompt, layers: [promptTraceLayer('recent-history', '最近对话原文', recentHistoryPrompt)] },
+    { text: historyWindowPrompt, layers: [promptTraceLayer('history-window', '原文窗口规则', historyWindowPrompt)] }
+  ].filter((segment) => Boolean(segment.text));
+  const prompt = segments.map((segment) => segment.text).join('\n\n');
+  const layers = segments.flatMap((segment) => segment.layers ?? []);
+  const separatorCharacters = Math.max(0, segments.length - 1) * 2;
+  if (separatorCharacters) layers.push({ id: 'prompt-separators', title: '提示词段落分隔', characters: separatorCharacters, estimatedTokens: 0 });
+  return { prompt, layers };
+}
+
+export function buildPrompt(context: PromptContext, options: PromptBuildOptions = {}) {
+  return buildPromptWithTrace(context, options).prompt;
 }
 
 function renderRecentVoomTopicReminderPrompt(context: PromptContext) {

@@ -417,8 +417,7 @@ const defaultUserBubbleColor = '#eeeeee';
 export const defaultConversationSettings: Omit<ConversationSettings, 'conversationId'> = {
   memory: defaultChatMemorySettings,
   requestRecovery: {
-    retryTransientFailures: true,
-    retryMalformedRoleplayJson: true
+    retryTransientFailures: true
   },
   modelOverrides: normalizeChatModelOverrides(null),
   appearance: {
@@ -572,8 +571,7 @@ export function normalizeConversationSettings(settings: Partial<ConversationSett
       embeddingModel: String(memory.embeddingModel ?? memoryDefaults.embeddingModel).trim()
     },
     requestRecovery: {
-      retryTransientFailures: requestRecovery.retryTransientFailures ?? defaultConversationSettings.requestRecovery.retryTransientFailures,
-      retryMalformedRoleplayJson: requestRecovery.retryMalformedRoleplayJson ?? defaultConversationSettings.requestRecovery.retryMalformedRoleplayJson
+      retryTransientFailures: requestRecovery.retryTransientFailures ?? defaultConversationSettings.requestRecovery.retryTransientFailures
     },
     modelOverrides,
     appearance: {

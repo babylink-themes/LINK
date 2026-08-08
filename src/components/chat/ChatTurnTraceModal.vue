@@ -34,7 +34,47 @@
                 </div>
 
                 <div class="trace-note-body">
-                  <pre v-if="traceMindText">{{ traceMindText }}</pre>
+                  <section v-if="showTokenBreakdown" class="trace-token-ledger" aria-label="本回合 Token 构成" @click.stop>
+                    <header class="trace-token-ledger-head">
+                      <small>TURN TOKEN LEDGER</small>
+                      <strong>本回合 Token 账本</strong>
+                      <p>{{ usageCoverageLabel }}</p>
+                    </header>
+
+                    <section class="trace-token-total">
+                      <span><small>SUPPLIER TOTAL</small><strong>{{ exactTotalTokenLabel }}</strong></span>
+                      <span><small>INPUT</small><strong>{{ inputTokenLabel }}</strong></span>
+                      <span><small>OUTPUT</small><strong>{{ outputTokenLabel }}</strong></span>
+                    </section>
+
+                    <section v-if="apiCalls.length" class="trace-token-call-list">
+                      <article v-for="(call, index) in apiCalls" :key="`${call.requestId || call.label}-${index}`" class="trace-token-call">
+                        <header>
+                          <span><small>REQUEST {{ String(index + 1).padStart(2, '0') }}</small><strong>{{ call.label }}</strong></span>
+                          <em>{{ formatCallTotal(call) }}</em>
+                        </header>
+                        <div class="trace-token-call-meta">
+                          <span>{{ call.model || trace?.model || 'MODEL UNKNOWN' }}</span>
+                          <span>IN {{ formatTokenCount(call.usage?.inputTokens) }} · OUT {{ formatTokenCount(call.usage?.outputTokens) }}</span>
+                        </div>
+                        <div v-if="call.layers?.length" class="trace-token-layer-list">
+                          <div v-for="layer in call.layers ?? []" :key="layer.id" class="trace-token-layer">
+                            <span><strong>{{ layer.title }}</strong><small>{{ layer.characters.toLocaleString('zh-CN') }} 字符<span v-if="layer.imageCount"> · {{ layer.imageCount }} 图</span></small></span>
+                            <b>≈{{ layer.estimatedTokens.toLocaleString('zh-CN') }}</b>
+                          </div>
+                        </div>
+                        <p v-else class="trace-token-no-layers">这条旧记录未保存提示词分层。</p>
+                      </article>
+                    </section>
+
+                    <section v-else class="trace-token-empty">
+                      <strong>此历史记录没有保存逐请求明细</strong>
+                      <p>之后生成的回复会在这里显示本回合全部 API 请求和提示词层级。</p>
+                    </section>
+
+                    <footer>供应商仅回传整次请求用量；各层的 ≈ 值为本地估算，用于解释构成，不会替代实际总量。</footer>
+                  </section>
+                  <pre v-else-if="traceMindText">{{ traceMindText }}</pre>
                   <div v-else class="trace-no-thought">
                     <Sparkles :size="22" stroke-width="1.55" />
                     <strong>{{ trace ? '这一次没有留下思维内容' : '这条历史消息没有保存记录' }}</strong>
@@ -44,7 +84,7 @@
 
                 <footer class="trace-note-meta">
                   <span>{{ trace?.model || 'MODEL UNKNOWN' }}</span>
-                  <span>{{ tokenLabel || 'TOKEN —' }}</span>
+                  <button class="trace-token-button" type="button" :aria-expanded="showTokenBreakdown" aria-label="查看本回合 Token 构成" @click.stop="toggleTokenBreakdown">{{ tokenLabel || 'TOKEN —' }}</button>
                 </footer>
               </section>
 
@@ -153,10 +193,12 @@ const emit = defineEmits<{
 
 const isFlipped = ref(false);
 const activeToolIndex = ref<number | null>(null);
+const showTokenBreakdown = ref(false);
 let lastFlipAt = 0;
 let customThoughtChainStyleElement: HTMLStyleElement | null = null;
 
 const toolCalls = computed(() => props.trace?.mcpToolCalls ?? []);
+const apiCalls = computed(() => props.trace?.apiCalls ?? []);
 const traceMindText = computed(() => props.trace?.visibleReasoning || props.trace?.reasoning || '');
 const thoughtChainTheme = computed(() => props.trace?.thoughtChainTheme ?? null);
 const hasCustomThoughtChain = computed(() => Boolean(thoughtChainTheme.value && (thoughtChainTheme.value.template || thoughtChainTheme.value.css)));
@@ -186,11 +228,26 @@ const generatedLabel = computed(() => {
 const tokenLabel = computed(() => {
   const usage = props.trace?.usage;
   const total = usage?.totalTokens ?? ((usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0));
-  return total > 0 ? `TOKENS ${total.toLocaleString('zh-CN')}` : '';
+  if (total <= 0) return '';
+  if (apiCalls.value.length && !props.trace?.usageComplete) return 'TOKENS PARTIAL';
+  if (!apiCalls.value.length) return 'TOKENS LEGACY';
+  return `TOKENS ${total.toLocaleString('zh-CN')}`;
 });
+const exactTotalTokenLabel = computed(() => {
+  const total = props.trace?.usage?.totalTokens;
+  if (total === undefined || total <= 0) return '—';
+  return props.trace?.usageComplete ? total.toLocaleString('zh-CN') : '未完整回传';
+});
+const inputTokenLabel = computed(() => formatTokenCount(props.trace?.usage?.inputTokens));
 const outputTokenLabel = computed(() => {
   const output = props.trace?.usage?.outputTokens;
   return output && output > 0 ? output.toLocaleString('zh-CN') : '—';
+});
+const usageCoverageLabel = computed(() => {
+  if (!apiCalls.value.length) return '历史记录只保存了旧的汇总用量，未保存逐请求账本。';
+  const reportedCalls = props.trace?.usageReportedCallCount ?? 0;
+  if (props.trace?.usageComplete) return `供应商已回传全部 ${reportedCalls}/${apiCalls.value.length} 次模型请求的实际用量。`;
+  return `供应商仅回传 ${reportedCalls}/${apiCalls.value.length} 次模型请求的用量；不会把缺失部分伪造成准确总量。`;
 });
 const statusLabel = computed(() => (props.trace?.finishReason || props.trace?.status || 'saved').toUpperCase());
 const requestLabel = computed(() => props.trace?.requestId ? `ID ${props.trace.requestId.slice(-10)}` : 'LOCAL ARCHIVE');
@@ -206,6 +263,7 @@ watch(() => props.modelValue, (isOpen) => {
   if (!isOpen) return;
   isFlipped.value = false;
   activeToolIndex.value = null;
+  showTokenBreakdown.value = false;
 });
 
 watch([() => props.modelValue, hasCustomThoughtChain, thoughtChainScopeId, thoughtChainTheme], () => {
@@ -243,6 +301,21 @@ function toggleCard() {
 
 function toggleTool(index: number) {
   activeToolIndex.value = activeToolIndex.value === index ? null : index;
+}
+
+function toggleTokenBreakdown() {
+  showTokenBreakdown.value = !showTokenBreakdown.value;
+}
+
+function formatTokenCount(value: number | undefined) {
+  return value !== undefined && value > 0 ? value.toLocaleString('zh-CN') : '—';
+}
+
+function formatCallTotal(call: { usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number } }) {
+  const total = call.usage?.totalTokens ?? (call.usage?.inputTokens !== undefined && call.usage?.outputTokens !== undefined
+    ? call.usage.inputTokens + call.usage.outputTokens
+    : undefined);
+  return total !== undefined ? total.toLocaleString('zh-CN') : '未回传';
 }
 
 function formatArguments(value: Record<string, unknown>) {
@@ -494,6 +567,207 @@ function formatArguments(value: Record<string, unknown>) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.trace-token-button {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  line-height: inherit;
+  text-align: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.trace-token-button:focus-visible {
+  outline: 1px solid #7f978a;
+  outline-offset: 3px;
+}
+
+.trace-token-ledger {
+  display: grid;
+  gap: 9px;
+  padding: 1px 1px 8px;
+  color: #5c5d56;
+}
+
+.trace-token-ledger-head {
+  display: grid;
+  gap: 3px;
+}
+
+.trace-token-ledger-head small,
+.trace-token-total small,
+.trace-token-call header small,
+.trace-token-layer small {
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+}
+
+.trace-token-ledger-head small { color: #7f978a; }
+
+.trace-token-ledger-head strong {
+  color: #343832;
+  font-family: Georgia, 'Songti SC', serif;
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.trace-token-ledger-head p,
+.trace-token-empty p,
+.trace-token-no-layers {
+  margin: 0;
+  color: #858277;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.trace-token-total {
+  display: grid;
+  grid-template-columns: 1.4fr repeat(2, 1fr);
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid rgba(117, 105, 87, 0.17);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.trace-token-total span {
+  display: grid;
+  gap: 3px;
+  padding: 7px 6px;
+  border-left: 1px solid rgba(117, 105, 87, 0.12);
+}
+
+.trace-token-total span:first-child { border-left: 0; }
+.trace-token-total small { color: #8b8172; }
+
+.trace-token-total strong {
+  color: #46564b;
+  font-size: 11px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.trace-token-call-list {
+  display: grid;
+  gap: 8px;
+}
+
+.trace-token-call {
+  overflow: hidden;
+  border: 1px solid rgba(117, 105, 87, 0.16);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.trace-token-call > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px 6px;
+  border-bottom: 1px solid rgba(117, 105, 87, 0.12);
+}
+
+.trace-token-call > header span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.trace-token-call > header small { color: #8eaa9b; }
+
+.trace-token-call > header strong {
+  overflow: hidden;
+  color: #494b43;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-token-call > header em {
+  color: #637c6c;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.trace-token-call-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  color: #898478;
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.trace-token-call-meta span:last-child { text-align: right; }
+
+.trace-token-layer-list {
+  display: grid;
+  border-top: 1px solid rgba(117, 105, 87, 0.1);
+}
+
+.trace-token-layer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+  padding: 5px 8px;
+  border-top: 1px dashed rgba(117, 105, 87, 0.1);
+}
+
+.trace-token-layer:first-child { border-top: 0; }
+
+.trace-token-layer span {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.trace-token-layer strong {
+  overflow: hidden;
+  color: #5c5d56;
+  font-size: 9px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-token-layer small { color: #aaa195; font-size: 7px; }
+
+.trace-token-layer b {
+  color: #748d7b;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.trace-token-empty {
+  display: grid;
+  gap: 5px;
+  padding: 9px 7px;
+  color: #5f625a;
+}
+
+.trace-token-empty strong { font-size: 11px; }
+
+.trace-token-no-layers { padding: 7px 8px; }
+
+.trace-token-ledger > footer {
+  color: #999184;
+  font-size: 8px;
+  line-height: 1.6;
 }
 
 .trace-tap-guide {

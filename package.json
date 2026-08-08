@@ -24,6 +24,7 @@
     "test:mcp-access": "tsx --tsconfig tsconfig.app.json scripts/mcp-access-regression.ts",
     "test:mcp-results": "tsx --tsconfig tsconfig.app.json scripts/mcp-results-regression.ts",
     "test:link-preview": "tsx --tsconfig tsconfig.app.json scripts/link-preview-regression.ts",
+    "test:prompt-catalog": "tsx --tsconfig tsconfig.app.json scripts/prompt-catalog-regression.ts",
     "test:mobile-runtime": "tsx --tsconfig tsconfig.app.json scripts/mobile-runtime-regression.ts",
     "test:message-pagination": "tsx --tsconfig tsconfig.app.json scripts/message-pagination-regression.ts",
     "test:fanfic-chapter": "tsx --tsconfig tsconfig.app.json scripts/fanfic-chapter-regression.ts",

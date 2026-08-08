@@ -409,14 +409,6 @@
               <span>遇到 405、429 或 5xx 时，等待后额外请求一次；关闭后立即显示本次错误。</span>
             </div>
           </label>
-          <label class="switch-card wide">
-            <input v-model="draft.requestRecovery.retryMalformedRoleplayJson" type="checkbox" @change="saveDraft" />
-            <span class="switch-track"></span>
-            <div>
-              <strong>回复 JSON 损坏时重新生成</strong>
-              <span>角色模型返回损坏的结构化回复时，再完整请求一次；关闭后不会产生第二次请求。</span>
-            </div>
-          </label>
         </section>
         <section class="settings-block character-mcp-block">
           <header class="section-header">
